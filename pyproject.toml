@@ -1,0 +1,9 @@
+[project]
+name = "comfyui-jr-indextts25"
+version = "0.1.0"
+description = "Native IndexTTS-2.5 nodes for ComfyUI on Python 3.13 and Torch 2.11 cu130"
+requires-python = ">=3.13,<3.14"
+dynamic = ["dependencies"]
+
+[tool.comfy]
+DisplayName = "ComfyUI JR IndexTTS 2.5"
