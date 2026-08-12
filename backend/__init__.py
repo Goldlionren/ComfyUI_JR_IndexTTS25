@@ -1,4 +1,5 @@
 from .indextts25_backend import (
+    DialogueSegment,
     EmotionControl,
     IndexTTS25Handle,
     VoicePreset,
@@ -8,10 +9,29 @@ from .indextts25_backend import (
     generate_audio,
     load_model,
     parse_dialogue,
+    parse_dialogue_segments,
     runtime_diagnostics,
+)
+from .voice_presets import (
+    VoicePresetRecord,
+    delete_voice_preset,
+    list_voice_presets,
+    load_voice_preset_audio,
+    rename_voice_preset,
+    save_voice_preset,
+)
+from .openai_compatible import (
+    DEFAULT_OPENAI_API_URL,
+    DEFAULT_OPENAI_MODEL,
+    analyze_emotion_text,
+    enhance_pronunciation_text,
+    normalize_pronunciation_response,
+    openai_chat_completion,
+    parse_emotion_response,
 )
 
 __all__ = [
+    "DialogueSegment",
     "EmotionControl",
     "IndexTTS25Handle",
     "VoicePreset",
@@ -21,5 +41,19 @@ __all__ = [
     "generate_audio",
     "load_model",
     "parse_dialogue",
+    "parse_dialogue_segments",
     "runtime_diagnostics",
+    "VoicePresetRecord",
+    "delete_voice_preset",
+    "list_voice_presets",
+    "load_voice_preset_audio",
+    "rename_voice_preset",
+    "save_voice_preset",
+    "DEFAULT_OPENAI_API_URL",
+    "DEFAULT_OPENAI_MODEL",
+    "analyze_emotion_text",
+    "enhance_pronunciation_text",
+    "normalize_pronunciation_response",
+    "openai_chat_completion",
+    "parse_emotion_response",
 ]

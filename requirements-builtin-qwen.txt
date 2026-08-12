@@ -1,0 +1,2 @@
+# Optional: only needed when Emotion Control uses text_emotion_backend=builtin_qwen.
+modelscope>=1.34.0

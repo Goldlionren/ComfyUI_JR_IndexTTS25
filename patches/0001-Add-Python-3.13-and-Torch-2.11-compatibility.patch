@@ -1,0 +1,398 @@
+From 93684de2ee4efa05f64044597dde475db4b7fe6f Mon Sep 17 00:00:00 2001
+From: James Ren <12345678goldlionren@users.noreply.github.com>
+Date: Wed, 12 Aug 2026 23:25:07 +1000
+Subject: [PATCH 1/2] Add Python 3.13 and Torch 2.11 compatibility
+
+---
+ indextts/gpt/transformers_compat.py           | 76 +++++++++++++++++++
+ indextts/gpt/transformers_generation_utils.py | 17 ++---
+ indextts/gpt/transformers_gpt2.py             |  3 +-
+ indextts/infer_v2_5.py                        | 33 ++++++--
+ pyproject.toml                                | 76 +++++++------------
+ 5 files changed, 136 insertions(+), 69 deletions(-)
+ create mode 100644 indextts/gpt/transformers_compat.py
+
+diff --git a/indextts/gpt/transformers_compat.py b/indextts/gpt/transformers_compat.py
+new file mode 100644
+index 0000000..afe69b7
+--- /dev/null
++++ b/indextts/gpt/transformers_compat.py
+@@ -0,0 +1,76 @@
++"""Narrow adapters for private Transformers APIs used by vendored generation code."""
++
++from __future__ import annotations
++
++from transformers.cache_utils import Cache
++
++try:
++    from transformers.generation.configuration_utils import (
++        NEED_SETUP_CACHE_CLASSES_MAPPING,
++        QUANT_BACKEND_CLASSES_MAPPING,
++    )
++except ImportError:
++    # Transformers 4.56 moved cache construction into GenerationMixin and no
++    # longer exposes these private registries. IndexTTS baseline uses dynamic
++    # cache (cache_implementation=None); explicit static/quantized cache modes
++    # remain intentionally outside the validated compatibility surface.
++    NEED_SETUP_CACHE_CLASSES_MAPPING = {}
++    QUANT_BACKEND_CLASSES_MAPPING = {}
++
++
++try:
++    from transformers.cache_utils import QuantizedCacheConfig
++except ImportError:
++
++    class QuantizedCacheConfig:  # pragma: no cover - only used by optional quantized cache
++        """Fail clearly when an obsolete quantized-cache path is explicitly requested."""
++
++        def __init__(self, *args, **kwargs):
++            raise RuntimeError(
++                "This IndexTTS compatibility layer does not support the removed "
++                "Transformers QuantizedCacheConfig API. Disable quantized KV cache."
++            )
++
++
++try:
++    from transformers.generation.candidate_generator import _crop_past_key_values
++except ImportError:
++
++    def _crop_past_key_values(model, past_key_values, max_length):
++        """Transformers 4.52-compatible cache crop for legacy assisted generation."""
++        new_past = []
++        if isinstance(past_key_values, Cache):
++            past_key_values.crop(max_length)
++        elif model.config.is_encoder_decoder:
++            for layer in past_key_values:
++                new_past.append(
++                    (
++                        layer[0][:, :, :max_length, :],
++                        layer[1][:, :, :max_length, :],
++                        layer[2],
++                        layer[3],
++                    )
++                )
++            past_key_values = tuple(new_past)
++        elif "gptbigcode" in model.__class__.__name__.lower() or (
++            model.config.architectures is not None
++            and "gptbigcode" in model.config.architectures[0].lower()
++        ):
++            for index in range(len(past_key_values)):
++                if model.config.multi_query:
++                    past_key_values[index] = past_key_values[index][:, :max_length, :]
++                else:
++                    past_key_values[index] = past_key_values[index][:, :, :max_length, :]
++        elif past_key_values is not None:
++            for layer in past_key_values:
++                if layer != ([], []):
++                    new_past.append(
++                        (
++                            layer[0][:, :, :max_length, :],
++                            layer[1][:, :, :max_length, :],
++                        )
++                    )
++                else:
++                    new_past.append((layer[0], layer[1]))
++            past_key_values = tuple(new_past)
++        return past_key_values
+diff --git a/indextts/gpt/transformers_generation_utils.py b/indextts/gpt/transformers_generation_utils.py
+index 4e71b0b..c4e9e74 100755
+--- a/indextts/gpt/transformers_generation_utils.py
++++ b/indextts/gpt/transformers_generation_utils.py
+@@ -30,9 +30,14 @@ from transformers.cache_utils import (
+     DynamicCache,
+     EncoderDecoderCache,
+     OffloadedCache,
+-    QuantizedCacheConfig,
+     StaticCache,
+ )
++from indextts.gpt.transformers_compat import (
++    NEED_SETUP_CACHE_CLASSES_MAPPING,
++    QUANT_BACKEND_CLASSES_MAPPING,
++    QuantizedCacheConfig,
++    _crop_past_key_values,
++)
+ from transformers.configuration_utils import PretrainedConfig
+ from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+ from transformers.integrations.fsdp import is_fsdp_managed_module
+@@ -55,16 +60,10 @@ from transformers.generation.candidate_generator import (
+     AssistedCandidateGeneratorDifferentTokenizers,
+     CandidateGenerator,
+     PromptLookupCandidateGenerator,
+-    _crop_past_key_values,
+     _prepare_attention_mask,
+     _prepare_token_type_ids,
+ )
+-from transformers.generation.configuration_utils import (
+-    NEED_SETUP_CACHE_CLASSES_MAPPING,
+-    QUANT_BACKEND_CLASSES_MAPPING,
+-    GenerationConfig,
+-    GenerationMode,
+-)
++from transformers.generation.configuration_utils import GenerationConfig, GenerationMode
+ from transformers.generation.logits_process import (
+     EncoderNoRepeatNGramLogitsProcessor,
+     EncoderRepetitionPenaltyLogitsProcessor,
+@@ -1002,7 +1001,7 @@ class GenerationMixin:
+                     device=device,
+                 )
+             )
+-        if generation_config.forced_decoder_ids is not None:
++        if getattr(generation_config, "forced_decoder_ids", None) is not None:
+             # TODO (sanchit): move this exception to GenerationConfig.validate() when TF & FLAX are aligned with PT
+             raise ValueError(
+                 "You have explicitly specified `forced_decoder_ids`. Please remove the `forced_decoder_ids` argument "
+diff --git a/indextts/gpt/transformers_gpt2.py b/indextts/gpt/transformers_gpt2.py
+index ab7fa96..35f2c9b 100755
+--- a/indextts/gpt/transformers_gpt2.py
++++ b/indextts/gpt/transformers_gpt2.py
+@@ -31,8 +31,7 @@ from transformers.activations import ACT2FN
+ import transformers
+ 
+ from indextts.gpt.transformers_generation_utils import GenerationMixin
+-from indextts.gpt.transformers_modeling_utils import PreTrainedModel
+-from transformers.modeling_utils import SequenceSummary
++from indextts.gpt.transformers_modeling_utils import PreTrainedModel, SequenceSummary
+ 
+ from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa, _prepare_4d_causal_attention_mask_for_sdpa
+ from transformers.modeling_outputs import (
+diff --git a/indextts/infer_v2_5.py b/indextts/infer_v2_5.py
+index 6790ce4..0454cd9 100644
+--- a/indextts/infer_v2_5.py
++++ b/indextts/infer_v2_5.py
+@@ -1,11 +1,11 @@
+ import os
+ from subprocess import CalledProcessError
+ 
+-os.environ['HF_HUB_CACHE'] = './checkpoints/hf_cache'
+ import json
+ import re
+ import time
+ import librosa
++import soundfile as sf
+ import torch
+ import torchaudio
+ from torch.nn.utils.rnn import pad_sequence
+@@ -30,7 +30,6 @@ from indextts.s2mel.modules.bigvgan import bigvgan
+ from indextts.s2mel.modules.campplus.DTDNN import CAMPPlus
+ from indextts.s2mel.modules.audio import mel_spectrogram
+ from transformers import AutoTokenizer
+-from modelscope import AutoModelForCausalLM
+ from transformers import SeamlessM4TFeatureExtractor, Wav2Vec2BertModel
+ import random
+ import torch.nn.functional as F
+@@ -40,6 +39,14 @@ PRONUNCIATION_ANNOTATION_PATTERN = re.compile(r'<([^|>\n]+)\|([^>\n]+)>')
+ 匹配发音标注格式：<文字|发音>
+ 例如：<going|G OW1 . IH0 NG>，<行|XING2>
+ """
++
++
++def _write_pcm16_wav(output_path, wav, sampling_rate):
++    """Write channel-first waveform data without TorchCodec/FFmpeg coupling."""
++    wav_data = wav.detach().to(device="cpu", dtype=torch.int16).numpy().T
++    sf.write(output_path, wav_data, sampling_rate, subtype="PCM_16", format="WAV")
++
++
+ def is_kana(s: str) -> bool:
+     hira = re.compile(r'^[\u3040-\u309F]+$')
+     kata = re.compile(r'^[\u30A0-\u30FF]+$')
+@@ -75,7 +82,7 @@ def apply_pronunciation_annotations(text: str) -> str:
+ class IndexTTS2:
+     def __init__(
+             self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_bf16=False, device=None,
+-            use_gpt_latent=False, use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False, use_qwen_emo=False
++            use_gpt_latent=False, use_cuda_kernel=False, use_deepspeed=False, use_accel=False, use_torch_compile=False, use_qwen_emo=False
+     ):
+         """
+         Args:
+@@ -83,7 +90,7 @@ class IndexTTS2:
+             model_dir (str): path to the model directory.
+             use_bf16 (bool): whether to use bf16.
+             device (str): device to use (e.g., 'cuda:0', 'cpu'). If None, it will be set automatically based on the availability of CUDA or MPS.
+-            use_cuda_kernel (None | bool): whether to use BigVGan custom fused activation CUDA kernel, only for CUDA device.
++            use_cuda_kernel (bool): whether to use BigVGan custom fused activation CUDA kernel, only for CUDA device.
+             use_deepspeed (bool): whether to use DeepSpeed or not.
+             use_accel (bool): whether to use acceleration engine for GPT2 or not.
+             use_torch_compile (bool): whether to use torch.compile for optimization or not.
+@@ -233,7 +240,10 @@ class IndexTTS2:
+         print(">> bigvgan weights restored from:", bigvgan_dir)
+ 
+         self.tokenizer = get_tokenizer(multilingual=True, model_dir=self.model_dir)
+-        self.ja_text_process = JapaneseG2PProcessor(g2p_ratio=0)
++        # Japanese G2P is optional for non-Japanese inference. Initializing it
++        # eagerly makes the whole model fail to load when fugashi/MeCab is not
++        # installed in an otherwise compatible ComfyUI runtime.
++        self.ja_text_process = None
+         self.text_process = TextNormalizer(enable_glossary=True)
+         self.text_process.load()
+ 
+@@ -539,7 +549,7 @@ class IndexTTS2:
+                         os.remove(output_path)
+                     if os.path.dirname(output_path) != "":
+                         os.makedirs(os.path.dirname(output_path), exist_ok=True)
+-                    torchaudio.save(output_path, wav, sampling_rate)
++                    _write_pcm16_wav(output_path, wav, sampling_rate)
+                     print(">> wav file saved to:", output_path)
+                     return output_path
+                 else:
+@@ -715,6 +725,8 @@ class IndexTTS2:
+         text = apply_pronunciation_annotations(text)
+ 
+         if lang.lower() == 'ja':
++            if self.ja_text_process is None:
++                self.ja_text_process = JapaneseG2PProcessor(g2p_ratio=0)
+             text = self.ja_text_process.process_ja_text(text)
+         text = re.sub(r'<\|([^|]+)\|>', lambda m: f'<|{m.group(1).upper()}|>', text)
+         segments = self.split_text_by_tokens(text, max_text_tokens_per_segment, lang_prefix)
+@@ -908,7 +920,7 @@ class IndexTTS2:
+             if os.path.dirname(output_path) != "":
+                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
+ 
+-            torchaudio.save(output_path, wav.type(torch.int16), sampling_rate)
++            _write_pcm16_wav(output_path, wav, sampling_rate)
+             print(">> wav file saved to:", output_path)
+             if stream_return:
+                 return None
+@@ -932,6 +944,11 @@ def find_most_similar_cosine(query_vector, matrix):
+ 
+ class QwenEmotion:
+     def __init__(self, model_dir):
++        # Qwen emotion analysis is optional. Keep ModelScope out of the base
++        # import path so native ComfyUI loading does not initialize it unless
++        # the Loader explicitly enables text-to-emotion guidance.
++        from modelscope import AutoModelForCausalLM
++
+         self.model_dir = model_dir
+         self.tokenizer = AutoTokenizer.from_pretrained(self.model_dir)
+         self.model = AutoModelForCausalLM.from_pretrained(
+@@ -1103,4 +1120,4 @@ if __name__ == "__main__":
+         use_qwen_emo=True,
+     )
+ 
+-    tts.infer(spk_audio_prompt=args.prompt_wav, text=args.text, lang=args.lang, output_path=args.output, verbose=True, text_normalization=args.text_normalization)
+\ No newline at end of file
++    tts.infer(spk_audio_prompt=args.prompt_wav, text=args.text, lang=args.lang, output_path=args.output, verbose=True, text_normalization=args.text_normalization)
+diff --git a/pyproject.toml b/pyproject.toml
+index d27f732..98e4fab 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -22,49 +22,47 @@ classifiers = [
+ 
+   "Operating System :: OS Independent",
+ ]
+-requires-python = ">=3.10,<3.12"
++requires-python = ">=3.10,<3.14"
+ dependencies = [
+   # IMPORTANT: Always run `uv lock` or `uv lock --upgrade` to resolve dependencies
+   # and update the lockfile after editing anything below.
+   # WARNING: Ensure that you don't have a local `uv.toml` which overrides PyPI
+   # while generating the lockfile: https://github.com/astral-sh/uv/issues/15741
+-  "accelerate==1.8.1",
++  "accelerate==1.12.0",
+   "cn2an==0.5.22",
+-  "cython==3.0.7",
+-  "descript-audiotools==0.7.2",
++  "descript-audiotools @ git+https://github.com/descriptinc/audiotools.git@ffe03e96b4d2dfb3ddecad289a6a95a7e96cc8c6",
+   "einops>=0.8.1",
+   "ffmpeg-python==0.2.0",
+-  "fugashi>=1.2.0",
+-  "unidic-lite>=1.0.0",
++  "fugashi>=1.5.2",
++  "unidic-lite>=1.0.8",
+   "g2p-en==2.1.0",
+   "jieba==0.42.1",
+-  "json5==0.10.0",
+-  "keras==2.9.0",
+-  "librosa==0.10.2.post1",
+-  "matplotlib==3.10.0",
+-  "modelscope==1.27.0",
++  "json5==0.13.0",
++  "librosa==0.11.0",
++  "matplotlib==3.10.8",
++  "modelscope==1.34.0",
+   "munch==4.0.0",
+-  "numba==0.63.0",
+-  "numpy==2.2.6",
++  "numba==0.63.1",
++  "llvmlite==0.46.0",
++  "numpy>=2.2.6,<2.4",
+   "omegaconf>=2.3.0",
+   "opencv-python==4.9.0.80",
+-  "pandas==2.3.2",
+-  "safetensors==0.5.2",
++  "pandas==2.3.3",
++  "safetensors==0.7.0",
+   "sentencepiece>=0.2.1",
+   "tensorboard==2.20.0",
+-  "textstat>=0.7.10",
+-  "tokenizers==0.21.0",
+-  "torch==2.8.*",
+-  "torchaudio==2.8.*",
+-  "requests>=2.28",
++  "textstat>=0.7.12",
++  "tokenizers>=0.21.0,<0.23",
++  "requests>=2.32.5",
+   "tqdm>=4.67.1",
+-  "transformers==4.52.1",
+-  "openai-whisper>=20231117",
+-  "fugashi[unidic-lite]",
++  "transformers>=4.52.1,<4.57",
++  "audioop-lts==0.2.2; python_version >= '3.13'",
++  "soundfile==0.13.1",
++  "openai-whisper>=20250625",
+ 
+   # Use "wetext" on Windows/Mac, otherwise "WeTextProcessing" on Linux.
+-  "wetext>=0.0.9; sys_platform != 'linux'",
+-  "WeTextProcessing; sys_platform == 'linux'",
++  "wetext>=0.1.2; sys_platform != 'linux'",
++  "WeTextProcessing>=1.2.0; sys_platform == 'linux'",
+ ]
+ 
+ [project.optional-dependencies]
+@@ -79,15 +77,15 @@ deepspeed = [
+ # To install the GPT2 acceleration engine, use `uv sync --extra accel` (or `--all-extras`).
+ # NOTE: flash-attn 2.8.3.post1 also requires triton at import time on Windows.
+ accel = [
+-  "flash-attn==2.8.3.post1",
++  "flash-attn==2.8.4",
+   "nvidia-cuda-runtime-cu12",
+   "nvidia-cudnn-cu12",
+-  "triton-windows==3.1.0.post17; sys_platform == 'win32'",
++  "triton-windows>=3.6,<3.7; sys_platform == 'win32'",
+ ]
+ # To install torch.compile support for s2mel, use `uv sync --extra torch_compile` (or `--all-extras`).
+ # On Windows this is satisfied by the triton-windows package above.
+ torch_compile = [
+-  "triton-windows==3.1.0.post17; sys_platform == 'win32'",
++  "triton-windows>=3.6,<3.7; sys_platform == 'win32'",
+ ]
+ test = [
+   "pytest>=7.0",
+@@ -119,25 +117,3 @@ build-backend = "hatchling.build"
+ # wheel instead of compiling.
+ deepspeed = [{ requirement = "torch", match-runtime = true }]
+ flash-attn = [{ requirement = "torch", match-runtime = true }]
+-
+-[tool.uv.sources]
+-# Install PyTorch with CUDA support on Linux/Windows (CUDA doesn't exist for Mac).
+-# NOTE: We must explicitly request them as `dependencies` above. These improved
+-# versions will not be selected if they're only third-party dependencies.
+-torch = [
+-  { index = "pytorch-cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+-]
+-torchaudio = [
+-  { index = "pytorch-cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+-]
+-torchvision = [
+-  { index = "pytorch-cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+-]
+-
+-[[tool.uv.index]]
+-name = "pytorch-cuda"
+-# Use PyTorch built for NVIDIA Toolkit version 12.8.
+-# Available versions: https://pytorch.org/get-started/locally/
+-url = "https://download.pytorch.org/whl/cu128"
+-# Only use this index when explicitly requested by `tool.uv.sources`.
+-explicit = true
+-- 
+2.52.0.windows.1
+

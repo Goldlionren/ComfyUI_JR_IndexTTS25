@@ -10,11 +10,17 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import soundfile as sf
 import torch
+
+from .openai_compatible import (
+    DEFAULT_OPENAI_API_URL,
+    DEFAULT_OPENAI_MODEL,
+    analyze_emotion_text,
+)
 
 
 MODEL_FILES = (
@@ -27,6 +33,34 @@ MODEL_FILES = (
 )
 MODEL_CACHE: dict[tuple[str, str, bool, bool, str], "IndexTTS25Handle"] = {}
 MODEL_CACHE_LOCK = threading.RLock()
+EMOTION_NAMES = (
+    "happy",
+    "angry",
+    "sad",
+    "afraid",
+    "disgusted",
+    "melancholic",
+    "surprised",
+    "calm",
+)
+EMOTION_NAME_ALIASES = {
+    "开心": "happy",
+    "快乐": "happy",
+    "生气": "angry",
+    "愤怒": "angry",
+    "悲伤": "sad",
+    "伤心": "sad",
+    "害怕": "afraid",
+    "恐惧": "afraid",
+    "厌恶": "disgusted",
+    "嫌弃": "disgusted",
+    "忧郁": "melancholic",
+    "低沉": "melancholic",
+    "惊讶": "surprised",
+    "吃惊": "surprised",
+    "平静": "calm",
+    "冷静": "calm",
+}
 DIALOGUE_TAG = re.compile(r"\[([^\]]+)\]\s*[:：]\s*")
 
 
@@ -34,6 +68,7 @@ DIALOGUE_TAG = re.compile(r"\[([^\]]+)\]\s*[:：]\s*")
 class VoicePreset:
     name: str
     audio: dict[str, Any]
+    preset_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +76,21 @@ class EmotionControl:
     vector: tuple[float, ...] | None
     audio: dict[str, Any] | None = None
     alpha: float = 1.0
+    text: str | None = None
+    use_text: bool = False
+    random_sampling: bool = False
+    text_backend: str = "llama.cpp_openai_api"
+    openai_api_url: str = DEFAULT_OPENAI_API_URL
+    openai_api_key: str = ""
+    openai_model: str = DEFAULT_OPENAI_MODEL
+    llm_timeout_seconds: int = 120
+
+
+@dataclass(frozen=True)
+class DialogueSegment:
+    speaker: str
+    text: str
+    emotion: EmotionControl | None = None
 
 
 @dataclass
@@ -315,6 +365,16 @@ def generate_audio(
     text_normalization: bool = True,
     interval_silence_ms: int = 200,
     seed: int = 0,
+    do_sample: bool = True,
+    temperature: float = 0.8,
+    top_p: float = 0.8,
+    top_k: int = 30,
+    num_beams: int = 3,
+    repetition_penalty: float = 10.0,
+    length_penalty: float = 0.0,
+    max_mel_tokens: int = 1500,
+    max_text_tokens_per_segment: int = 120,
+    progress_callback: Callable[[float, str], None] | None = None,
 ) -> dict[str, Any]:
     if handle.runtime is None:
         raise RuntimeError("This IndexTTS-2.5 model handle has been unloaded; run Loader again")
@@ -322,49 +382,205 @@ def generate_audio(
         raise ValueError("Text is empty")
     if not 0.5 <= float(duration_factor) <= 2.0:
         raise ValueError("duration_factor must be between 0.5 and 2.0")
+    if not 0.1 <= float(temperature) <= 2.0:
+        raise ValueError("temperature must be between 0.1 and 2.0")
+    if not 0.0 <= float(top_p) <= 1.0:
+        raise ValueError("top_p must be between 0 and 1")
+    if not 0 <= int(top_k) <= 100:
+        raise ValueError("top_k must be between 0 and 100")
+    if not 1 <= int(num_beams) <= 10:
+        raise ValueError("num_beams must be between 1 and 10")
+    if not 0.1 <= float(repetition_penalty) <= 20.0:
+        raise ValueError("repetition_penalty must be between 0.1 and 20")
+    if not -2.0 <= float(length_penalty) <= 2.0:
+        raise ValueError("length_penalty must be between -2 and 2")
+    if not 50 <= int(max_mel_tokens) <= 1815:
+        raise ValueError("max_mel_tokens must be between 50 and 1815")
+    if not 20 <= int(max_text_tokens_per_segment) <= 600:
+        raise ValueError("max_text_tokens_per_segment must be between 20 and 600")
     speaker_path = _materialize_audio(voice.audio, "speaker")
     emotion_path = _materialize_audio(emotion.audio, "emotion") if emotion and emotion.audio else None
     emotion_vector = list(emotion.vector) if emotion and emotion.vector is not None else None
     emotion_alpha = float(emotion.alpha) if emotion else 1.0
+    use_emotion_text = bool(emotion and emotion.use_text)
+    emotion_text = emotion.text if use_emotion_text else None
+    random_emotion = bool(emotion and emotion.random_sampling)
+    if use_emotion_text and emotion and emotion.text_backend == "llama.cpp_openai_api":
+        if progress_callback is not None:
+            progress_callback(0.02, "analyzing emotion with llama.cpp...")
+        emotion_vector = list(
+            analyze_emotion_text(
+                emotion_text if emotion_text is not None else text,
+                api_url=emotion.openai_api_url,
+                api_key=emotion.openai_api_key,
+                model=emotion.openai_model,
+                timeout_seconds=emotion.llm_timeout_seconds,
+            )
+        )
+        use_emotion_text = False
+        emotion_text = None
+    elif use_emotion_text and not handle.use_qwen_emo:
+        raise RuntimeError(
+            "Built-in text emotion requires Loader enable_qwen_emotion=True. "
+            "Enable it or select llama.cpp_openai_api in Emotion Control."
+        )
     torch.manual_seed(int(seed) & 0x7FFFFFFF)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(int(seed) & 0x7FFFFFFF)
     with handle.lock, torch.inference_mode():
-        result = handle.runtime.infer(
-            spk_audio_prompt=str(speaker_path),
-            text=text,
-            output_path=None,
-            lang=language,
-            emo_audio_prompt=str(emotion_path) if emotion_path else None,
-            emo_alpha=emotion_alpha,
-            emo_vector=emotion_vector,
-            use_emo_text=False,
-            interval_silence=int(interval_silence_ms),
-            duration_factor=float(duration_factor),
-            text_normalization=bool(text_normalization),
-            verbose=False,
-        )
+        previous_progress = getattr(handle.runtime, "gr_progress", None)
+        if progress_callback is not None:
+            handle.runtime.gr_progress = lambda value, desc=None: progress_callback(
+                max(0.0, min(1.0, float(value))), str(desc or "")
+            )
+        try:
+            result = handle.runtime.infer(
+                spk_audio_prompt=str(speaker_path),
+                text=text,
+                output_path=None,
+                lang=language,
+                emo_audio_prompt=str(emotion_path) if emotion_path else None,
+                emo_alpha=emotion_alpha,
+                emo_vector=emotion_vector,
+                use_emo_text=use_emotion_text,
+                emo_text=emotion_text,
+                use_random=random_emotion,
+                interval_silence=int(interval_silence_ms),
+                duration_factor=float(duration_factor),
+                text_normalization=bool(text_normalization),
+                verbose=False,
+                max_text_tokens_per_segment=int(max_text_tokens_per_segment),
+                do_sample=bool(do_sample),
+                temperature=float(temperature),
+                top_p=float(top_p),
+                top_k=None if int(top_k) == 0 else int(top_k),
+                num_beams=int(num_beams),
+                repetition_penalty=float(repetition_penalty),
+                length_penalty=float(length_penalty),
+                max_mel_tokens=int(max_mel_tokens),
+            )
+        finally:
+            if progress_callback is not None:
+                handle.runtime.gr_progress = previous_progress
     if not isinstance(result, tuple) or len(result) != 2:
         raise RuntimeError(f"Unexpected IndexTTS-2.5 result: {type(result).__name__}")
     sample_rate, waveform = result
+    if progress_callback is not None:
+        progress_callback(1.0, "complete")
     return _numpy_to_audio(waveform, int(sample_rate))
 
 
-def parse_dialogue(text: str) -> list[tuple[str, str]]:
+def _parse_bool(value: str, option: str) -> bool:
+    normalized = value.strip().casefold()
+    if normalized in {"1", "true", "yes", "on", "是", "开"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "否", "关"}:
+        return False
+    raise ValueError(f"Dialogue emotion option {option!r} expects true/false, got {value!r}")
+
+
+def _dialogue_emotion(options: list[str]) -> EmotionControl | None:
+    if not options:
+        return None
+    vector_values = {name: 0.0 for name in EMOTION_NAMES}
+    has_vector = False
+    use_text = False
+    emotion_text: str | None = None
+    alpha = 1.0
+    random_sampling = False
+    apply_bias = True
+
+    for raw_option in options:
+        option = raw_option.strip()
+        if not option:
+            continue
+        if "=" in option:
+            raw_key, raw_value = option.split("=", 1)
+            key = raw_key.strip().casefold()
+            value = raw_value.strip()
+        else:
+            key = option.casefold()
+            value = ""
+
+        key = EMOTION_NAME_ALIASES.get(key, key)
+        if key in EMOTION_NAMES:
+            amount = 0.8 if value == "" else float(value)
+            if not 0.0 <= amount <= 1.0:
+                raise ValueError(f"Dialogue emotion {key!r} must be between 0 and 1")
+            vector_values[key] = amount
+            has_vector = True
+        elif key in {"strength", "alpha", "强度"}:
+            alpha = float(value)
+            if not 0.0 <= alpha <= 1.0:
+                raise ValueError("Dialogue emotion strength must be between 0 and 1")
+        elif key in {"auto", "自动", "自动情绪"}:
+            use_text = True
+            emotion_text = None
+        elif key in {"emo_text", "emotion_text", "情绪文本", "情感文本"}:
+            if not value:
+                raise ValueError("Dialogue emo_text cannot be empty")
+            use_text = True
+            emotion_text = value
+        elif key in {"random", "随机"}:
+            random_sampling = True if value == "" else _parse_bool(value, option)
+        elif key in {"bias", "official_bias", "官方偏置"}:
+            apply_bias = True if value == "" else _parse_bool(value, option)
+        elif key in {"natural", "none", "自然", "无情绪"}:
+            if len(options) != 1:
+                raise ValueError(f"Dialogue option {option!r} cannot be combined with other emotion options")
+            return None
+        else:
+            raise ValueError(f"Unknown dialogue emotion option: {option!r}")
+
+    if has_vector and use_text:
+        raise ValueError("Dialogue emotion vector options cannot be combined with auto/emo_text")
+    if use_text:
+        return EmotionControl(
+            vector=None,
+            alpha=alpha,
+            text=emotion_text,
+            use_text=True,
+            random_sampling=random_sampling,
+        )
+    if has_vector:
+        vector = normalize_emotion_vector(
+            tuple(vector_values[name] for name in EMOTION_NAMES),
+            apply_bias=apply_bias,
+        )
+        return EmotionControl(vector=vector, alpha=alpha, random_sampling=random_sampling)
+    raise ValueError("Dialogue emotion tag did not specify an emotion")
+
+
+def parse_dialogue_segments(text: str) -> list[DialogueSegment]:
     raw = (text or "").strip()
     if not raw:
         return []
     matches = list(DIALOGUE_TAG.finditer(raw))
     if not matches:
-        return [("Narrator", raw)]
-    segments: list[tuple[str, str]] = []
+        return [DialogueSegment(speaker="Narrator", text=raw)]
+    segments: list[DialogueSegment] = []
     for index, match in enumerate(matches):
         start = match.end()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
         content = raw[start:end].strip()
-        if content:
-            segments.append((match.group(1).strip(), content))
+        if not content:
+            continue
+        header = [part.strip() for part in match.group(1).split("|")]
+        speaker = header[0]
+        if not speaker:
+            raise ValueError("Dialogue speaker name cannot be empty")
+        segments.append(
+            DialogueSegment(
+                speaker=speaker,
+                text=content,
+                emotion=_dialogue_emotion(header[1:]),
+            )
+        )
     return segments
+
+
+def parse_dialogue(text: str) -> list[tuple[str, str]]:
+    return [(segment.speaker, segment.text) for segment in parse_dialogue_segments(text)]
 
 
 def cache_diagnostics() -> list[dict[str, Any]]:

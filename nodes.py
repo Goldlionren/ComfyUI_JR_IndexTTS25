@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any
 
 import torch
@@ -13,8 +14,24 @@ from .backend.indextts25_backend import (
     generate_audio,
     load_model,
     normalize_emotion_vector,
-    parse_dialogue,
+    parse_dialogue_segments,
     runtime_diagnostics,
+)
+from .backend.openai_compatible import (
+    DEFAULT_OPENAI_API_URL,
+    DEFAULT_OPENAI_MODEL,
+    enhance_pronunciation_text,
+)
+from .backend.voice_presets import (
+    delete_voice_preset,
+    list_voice_presets,
+    load_voice_preset_audio,
+    rename_voice_preset,
+    resolve_voice_preset,
+    save_voice_preset,
+    voice_preset_choices,
+    voice_preset_library_dir,
+    voice_preset_library_fingerprint,
 )
 
 
@@ -22,7 +39,60 @@ CATEGORY = "JR/Audio/IndexTTS 2.5"
 MODEL_TYPE = "JR_INDEXTTS25_MODEL"
 VOICE_TYPE = "JR_INDEXTTS25_VOICE"
 EMOTION_TYPE = "JR_INDEXTTS25_EMOTION"
-LANGUAGES = ["ZH", "EN", "JA", "ES", "DE", "FR", "KO", "RU"]
+LANGUAGES = ["ZH", "EN", "JA", "AR", "ES"]
+
+
+def _new_progress_bar():
+    try:
+        import comfy.utils
+
+        return comfy.utils.ProgressBar(1000)
+    except (ImportError, AttributeError):
+        return None
+
+
+def _progress_callback(progress_bar, start: float = 0.0, span: float = 1.0):
+    if progress_bar is None:
+        return None
+
+    def report(value: float, _description: str = ""):
+        absolute = max(0.0, min(1.0, start + span * float(value)))
+        progress_bar.update_absolute(round(absolute * 1000), 1000)
+
+    return report
+
+
+def _advanced_generation_inputs():
+    return {
+        "do_sample": ("BOOLEAN", {"default": True}),
+        "temperature": ("FLOAT", {"default": 0.8, "min": 0.1, "max": 2.0, "step": 0.05}),
+        "top_p": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.01}),
+        "top_k": ("INT", {"default": 30, "min": 0, "max": 100, "step": 1}),
+        "num_beams": ("INT", {"default": 3, "min": 1, "max": 10, "step": 1}),
+        "repetition_penalty": (
+            "FLOAT",
+            {"default": 10.0, "min": 0.1, "max": 20.0, "step": 0.1},
+        ),
+        "length_penalty": ("FLOAT", {"default": 0.0, "min": -2.0, "max": 2.0, "step": 0.1}),
+        "max_mel_tokens": ("INT", {"default": 1500, "min": 50, "max": 1815, "step": 10}),
+        "max_text_tokens_per_segment": (
+            "INT",
+            {"default": 120, "min": 20, "max": 600, "step": 2},
+        ),
+    }
+
+
+def _inherit_text_emotion_config(segment_emotion, shared_emotion):
+    if segment_emotion is None or not segment_emotion.use_text or shared_emotion is None:
+        return segment_emotion
+    return replace(
+        segment_emotion,
+        text_backend=shared_emotion.text_backend,
+        openai_api_url=shared_emotion.openai_api_url,
+        openai_api_key=shared_emotion.openai_api_key,
+        openai_model=shared_emotion.openai_model,
+        llm_timeout_seconds=shared_emotion.llm_timeout_seconds,
+    )
 
 
 class JR_IndexTTS25_Loader:
@@ -64,7 +134,10 @@ class JR_IndexTTS25_VoicePreset:
             "required": {
                 "reference_audio": ("AUDIO",),
                 "speaker_name": ("STRING", {"default": "Narrator"}),
-            }
+            },
+            "optional": {
+                "overwrite_existing": ("BOOLEAN", {"default": False}),
+            },
         }
 
     RETURN_TYPES = (VOICE_TYPE,)
@@ -72,9 +145,95 @@ class JR_IndexTTS25_VoicePreset:
     FUNCTION = "create"
     CATEGORY = CATEGORY
 
-    def create(self, reference_audio, speaker_name):
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def create(self, reference_audio, speaker_name, overwrite_existing=False):
         name = (speaker_name or "Narrator").strip() or "Narrator"
-        return (VoicePreset(name=name, audio=reference_audio),)
+        from .backend.indextts25_backend import audio_to_mono_numpy
+
+        waveform, sample_rate = audio_to_mono_numpy(reference_audio)
+        record = save_voice_preset(
+            name,
+            waveform,
+            sample_rate,
+            overwrite=bool(overwrite_existing),
+        )
+        _, stored_audio = load_voice_preset_audio(record.id)
+        return (VoicePreset(name=record.name, audio=stored_audio, preset_id=record.id),)
+
+
+class JR_IndexTTS25_LoadVoicePreset:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "preset": (voice_preset_choices(),),
+                "preset_id_or_name_override": ("STRING", {"default": ""}),
+            }
+        }
+
+    RETURN_TYPES = (VOICE_TYPE,)
+    RETURN_NAMES = ("voice",)
+    FUNCTION = "load"
+    CATEGORY = CATEGORY
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return voice_preset_library_fingerprint()
+
+    def load(self, preset, preset_id_or_name_override):
+        reference = (preset_id_or_name_override or "").strip() or preset
+        record, audio = load_voice_preset_audio(reference)
+        return (VoicePreset(name=record.name, audio=audio, preset_id=record.id),)
+
+
+class JR_IndexTTS25_VoicePresetManager:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "action": (["list", "inspect", "rename", "delete"], {"default": "list"}),
+                "preset_id_or_name": ("STRING", {"default": ""}),
+                "new_name": ("STRING", {"default": ""}),
+                "confirm_delete": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("presets_json",)
+    FUNCTION = "manage"
+    CATEGORY = CATEGORY
+    OUTPUT_NODE = True
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def manage(self, action, preset_id_or_name, new_name, confirm_delete):
+        reference = (preset_id_or_name or "").strip()
+        result: dict[str, Any] = {
+            "action": action,
+            "library_dir": str(voice_preset_library_dir(create=False)),
+        }
+        if action == "inspect":
+            if not reference:
+                raise ValueError("inspect requires preset_id_or_name")
+            result["preset"] = resolve_voice_preset(reference).to_dict()
+        elif action == "rename":
+            if not reference or not (new_name or "").strip():
+                raise ValueError("rename requires preset_id_or_name and new_name")
+            result["preset"] = rename_voice_preset(reference, new_name).to_dict()
+        elif action == "delete":
+            if not reference:
+                raise ValueError("delete requires preset_id_or_name")
+            if not confirm_delete:
+                raise ValueError("delete requires confirm_delete=True")
+            result["deleted"] = delete_voice_preset(reference).to_dict()
+        result["presets"] = [record.to_dict() for record in list_voice_presets()]
+        result["count"] = len(result["presets"])
+        return (json.dumps(result, ensure_ascii=False, indent=2),)
 
 
 class JR_IndexTTS25_EmotionControl:
@@ -86,12 +245,27 @@ class JR_IndexTTS25_EmotionControl:
         }
         return {
             "required": {
-                "mode": (["emotion_vector", "reference_audio"], {"default": "emotion_vector"}),
+                "mode": (
+                    ["emotion_vector", "reference_audio", "auto_from_text", "emotion_text"],
+                    {"default": "emotion_vector"},
+                ),
                 **sliders,
                 "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "apply_official_bias": ("BOOLEAN", {"default": True}),
             },
-            "optional": {"emotion_reference_audio": ("AUDIO",)},
+            "optional": {
+                "emotion_reference_audio": ("AUDIO",),
+                "emotion_text": ("STRING", {"multiline": True, "default": ""}),
+                "random_sampling": ("BOOLEAN", {"default": False}),
+                "text_emotion_backend": (
+                    ["llama.cpp_openai_api", "builtin_qwen"],
+                    {"default": "llama.cpp_openai_api"},
+                ),
+                "openai_api_url": ("STRING", {"default": DEFAULT_OPENAI_API_URL}),
+                "openai_api_key": ("STRING", {"default": ""}),
+                "openai_model": ("STRING", {"default": DEFAULT_OPENAI_MODEL}),
+                "llm_timeout_seconds": ("INT", {"default": 120, "min": 1, "max": 1800, "step": 1}),
+            },
         }
 
     RETURN_TYPES = (EMOTION_TYPE,)
@@ -99,16 +273,142 @@ class JR_IndexTTS25_EmotionControl:
     FUNCTION = "create"
     CATEGORY = CATEGORY
 
-    def create(self, mode, happy, angry, sad, afraid, disgusted, melancholic, surprised, calm, strength, apply_official_bias, emotion_reference_audio=None):
+    def create(
+        self,
+        mode,
+        happy,
+        angry,
+        sad,
+        afraid,
+        disgusted,
+        melancholic,
+        surprised,
+        calm,
+        strength,
+        apply_official_bias,
+        emotion_reference_audio=None,
+        emotion_text="",
+        random_sampling=False,
+        text_emotion_backend="llama.cpp_openai_api",
+        openai_api_url=DEFAULT_OPENAI_API_URL,
+        openai_api_key="",
+        openai_model=DEFAULT_OPENAI_MODEL,
+        llm_timeout_seconds=120,
+    ):
         if mode == "reference_audio":
             if emotion_reference_audio is None:
                 raise ValueError("reference_audio mode requires emotion_reference_audio")
-            return (EmotionControl(vector=None, audio=emotion_reference_audio, alpha=float(strength)),)
+            return (
+                EmotionControl(
+                    vector=None,
+                    audio=emotion_reference_audio,
+                    alpha=float(strength),
+                    text_backend=text_emotion_backend,
+                    openai_api_url=openai_api_url,
+                    openai_api_key=openai_api_key,
+                    openai_model=openai_model,
+                    llm_timeout_seconds=int(llm_timeout_seconds),
+                ),
+            )
+        if mode == "auto_from_text":
+            return (
+                EmotionControl(
+                    vector=None,
+                    alpha=float(strength),
+                    text=None,
+                    use_text=True,
+                    random_sampling=bool(random_sampling),
+                    text_backend=text_emotion_backend,
+                    openai_api_url=openai_api_url,
+                    openai_api_key=openai_api_key,
+                    openai_model=openai_model,
+                    llm_timeout_seconds=int(llm_timeout_seconds),
+                ),
+            )
+        if mode == "emotion_text":
+            description = (emotion_text or "").strip()
+            if not description:
+                raise ValueError("emotion_text mode requires emotion_text")
+            return (
+                EmotionControl(
+                    vector=None,
+                    alpha=float(strength),
+                    text=description,
+                    use_text=True,
+                    random_sampling=bool(random_sampling),
+                    text_backend=text_emotion_backend,
+                    openai_api_url=openai_api_url,
+                    openai_api_key=openai_api_key,
+                    openai_model=openai_model,
+                    llm_timeout_seconds=int(llm_timeout_seconds),
+                ),
+            )
         vector = normalize_emotion_vector(
             (happy, angry, sad, afraid, disgusted, melancholic, surprised, calm),
             apply_bias=bool(apply_official_bias),
         )
-        return (EmotionControl(vector=vector, audio=None, alpha=float(strength)),)
+        return (
+            EmotionControl(
+                vector=vector,
+                audio=None,
+                alpha=float(strength),
+                random_sampling=bool(random_sampling),
+                text_backend=text_emotion_backend,
+                openai_api_url=openai_api_url,
+                openai_api_key=openai_api_key,
+                openai_model=openai_model,
+                llm_timeout_seconds=int(llm_timeout_seconds),
+            ),
+        )
+
+
+class JR_IndexTTS25_PronunciationEnhance:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"multiline": True, "default": ""}),
+                "language": (["ZH", "EN", "JA"], {"default": "ZH"}),
+                "openai_api_url": ("STRING", {"default": DEFAULT_OPENAI_API_URL}),
+                "openai_api_key": ("STRING", {"default": ""}),
+                "openai_model": ("STRING", {"default": DEFAULT_OPENAI_MODEL}),
+                "llm_timeout_seconds": ("INT", {"default": 120, "min": 1, "max": 1800, "step": 1}),
+                "instruction": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "default": "只标注确实存在歧义、且需要指定读音的词，不要改写原文。",
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("enhanced_text",)
+    FUNCTION = "enhance"
+    CATEGORY = CATEGORY
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def enhance(self, text, language, openai_api_url, openai_api_key, openai_model, llm_timeout_seconds, instruction):
+        progress_bar = _new_progress_bar()
+        callback = _progress_callback(progress_bar)
+        if callback is not None:
+            callback(0.0, "requesting pronunciation enhancement")
+        result = enhance_pronunciation_text(
+            text=text,
+            language=language,
+            api_url=openai_api_url,
+            api_key=openai_api_key,
+            model=openai_model,
+            timeout_seconds=int(llm_timeout_seconds),
+            instruction=instruction,
+        )
+        if callback is not None:
+            callback(1.0, "complete")
+        return (result,)
 
 
 class JR_IndexTTS25_Generate:
@@ -125,6 +425,7 @@ class JR_IndexTTS25_Generate:
                 "interval_silence_ms": ("INT", {"default": 200, "min": 0, "max": 5000, "step": 10}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFF}),
                 "unload_model_after": ("BOOLEAN", {"default": False}),
+                **_advanced_generation_inputs(),
             },
             "optional": {"emotion": (EMOTION_TYPE,)},
         }
@@ -134,7 +435,29 @@ class JR_IndexTTS25_Generate:
     FUNCTION = "generate"
     CATEGORY = CATEGORY
 
-    def generate(self, model, voice, text, language, duration_factor, text_normalization, interval_silence_ms, seed, unload_model_after, emotion=None):
+    def generate(
+        self,
+        model,
+        voice,
+        text,
+        language,
+        duration_factor,
+        text_normalization,
+        interval_silence_ms,
+        seed,
+        unload_model_after,
+        do_sample=True,
+        temperature=0.8,
+        top_p=0.8,
+        top_k=30,
+        num_beams=3,
+        repetition_penalty=10.0,
+        length_penalty=0.0,
+        max_mel_tokens=1500,
+        max_text_tokens_per_segment=120,
+        emotion=None,
+    ):
+        progress_bar = _new_progress_bar()
         try:
             audio = generate_audio(
                 model,
@@ -146,6 +469,16 @@ class JR_IndexTTS25_Generate:
                 text_normalization=text_normalization,
                 interval_silence_ms=interval_silence_ms,
                 seed=seed,
+                do_sample=do_sample,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                num_beams=num_beams,
+                repetition_penalty=repetition_penalty,
+                length_penalty=length_penalty,
+                max_mel_tokens=max_mel_tokens,
+                max_text_tokens_per_segment=max_text_tokens_per_segment,
+                progress_callback=_progress_callback(progress_bar),
             )
             return (audio,)
         finally:
@@ -169,6 +502,7 @@ class JR_IndexTTS25_MultiTalkGenerate:
                 "text_normalization": ("BOOLEAN", {"default": True}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFF}),
                 "unload_model_after": ("BOOLEAN", {"default": False}),
+                **_advanced_generation_inputs(),
             },
             "optional": optional,
         }
@@ -178,31 +512,68 @@ class JR_IndexTTS25_MultiTalkGenerate:
     FUNCTION = "generate"
     CATEGORY = CATEGORY
 
-    def generate(self, model, dialogue, language, gap_ms, duration_factor, text_normalization, seed, unload_model_after, emotion=None, **kwargs):
+    def generate(
+        self,
+        model,
+        dialogue,
+        language,
+        gap_ms,
+        duration_factor,
+        text_normalization,
+        seed,
+        unload_model_after,
+        do_sample=True,
+        temperature=0.8,
+        top_p=0.8,
+        top_k=30,
+        num_beams=3,
+        repetition_penalty=10.0,
+        length_penalty=0.0,
+        max_mel_tokens=1500,
+        max_text_tokens_per_segment=120,
+        emotion=None,
+        **kwargs,
+    ):
         voices = [kwargs.get(f"voice_{index}") for index in range(1, 11)]
         voices = [voice for voice in voices if voice is not None]
         if not voices:
             raise ValueError("Multi-Talk requires at least one voice input")
         voice_map = {voice.name.casefold(): voice for voice in voices}
         default_voice = voices[0]
-        segments = parse_dialogue(dialogue)
+        segments = parse_dialogue_segments(dialogue)
         if not segments:
             raise ValueError("No dialogue segments found; use [Speaker]: text")
+        progress_bar = _new_progress_bar()
         waveforms = []
         sample_rate = None
         try:
-            for index, (speaker, text) in enumerate(segments):
-                voice = voice_map.get(speaker.casefold(), default_voice)
+            for index, segment in enumerate(segments):
+                voice = voice_map.get(segment.speaker.casefold(), default_voice)
+                segment_emotion = _inherit_text_emotion_config(segment.emotion, emotion)
                 audio = generate_audio(
                     model,
                     voice,
-                    text,
+                    segment.text,
                     language,
-                    emotion=emotion,
+                    emotion=segment_emotion if segment_emotion is not None else emotion,
                     duration_factor=duration_factor,
                     text_normalization=text_normalization,
                     interval_silence_ms=0,
                     seed=int(seed) + index,
+                    do_sample=do_sample,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    num_beams=num_beams,
+                    repetition_penalty=repetition_penalty,
+                    length_penalty=length_penalty,
+                    max_mel_tokens=max_mel_tokens,
+                    max_text_tokens_per_segment=max_text_tokens_per_segment,
+                    progress_callback=_progress_callback(
+                        progress_bar,
+                        start=index / len(segments),
+                        span=1.0 / len(segments),
+                    ),
                 )
                 current_rate = int(audio["sample_rate"])
                 if sample_rate is None:
@@ -258,7 +629,10 @@ class JR_IndexTTS25_RuntimeDiagnostics:
 NODE_CLASS_MAPPINGS = {
     "JR_IndexTTS25_Loader": JR_IndexTTS25_Loader,
     "JR_IndexTTS25_VoicePreset": JR_IndexTTS25_VoicePreset,
+    "JR_IndexTTS25_LoadVoicePreset": JR_IndexTTS25_LoadVoicePreset,
+    "JR_IndexTTS25_VoicePresetManager": JR_IndexTTS25_VoicePresetManager,
     "JR_IndexTTS25_EmotionControl": JR_IndexTTS25_EmotionControl,
+    "JR_IndexTTS25_PronunciationEnhance": JR_IndexTTS25_PronunciationEnhance,
     "JR_IndexTTS25_Generate": JR_IndexTTS25_Generate,
     "JR_IndexTTS25_MultiTalkGenerate": JR_IndexTTS25_MultiTalkGenerate,
     "JR_IndexTTS25_RuntimeDiagnostics": JR_IndexTTS25_RuntimeDiagnostics,
@@ -267,7 +641,10 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "JR_IndexTTS25_Loader": "JR IndexTTS 2.5 Loader",
     "JR_IndexTTS25_VoicePreset": "JR IndexTTS 2.5 Voice Preset",
+    "JR_IndexTTS25_LoadVoicePreset": "JR IndexTTS 2.5 Load Voice Preset",
+    "JR_IndexTTS25_VoicePresetManager": "JR IndexTTS 2.5 Voice Preset Manager",
     "JR_IndexTTS25_EmotionControl": "JR IndexTTS 2.5 Emotion Control",
+    "JR_IndexTTS25_PronunciationEnhance": "JR IndexTTS 2.5 Pronunciation Enhance (LLM)",
     "JR_IndexTTS25_Generate": "JR IndexTTS 2.5 Generate",
     "JR_IndexTTS25_MultiTalkGenerate": "JR IndexTTS 2.5 Multi-Talk Generate",
     "JR_IndexTTS25_RuntimeDiagnostics": "JR IndexTTS 2.5 Runtime Diagnostics",

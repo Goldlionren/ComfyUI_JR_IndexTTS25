@@ -1,0 +1,3 @@
+# Optional: only needed for Japanese (JA) synthesis.
+fugashi>=1.5.2
+unidic-lite>=1.0.8

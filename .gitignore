@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+.cache/
+index_tts/
+voice_presets/
+*.wav
+*.flac
+*.mp3
+*.log

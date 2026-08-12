@@ -2,8 +2,18 @@
 name = "comfyui-jr-indextts25"
 version = "0.1.0"
 description = "Native IndexTTS-2.5 nodes for ComfyUI on Python 3.13 and Torch 2.11 cu130"
+readme = "README.md"
 requires-python = ">=3.13,<3.14"
-dynamic = ["dependencies"]
+keywords = ["comfyui", "indextts", "tts", "voice-cloning", "audio"]
+classifiers = [
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: Microsoft :: Windows",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+[project.urls]
+Repository = "https://github.com/Goldlionren/ComfyUI_JR_IndexTTS25"
+Issues = "https://github.com/Goldlionren/ComfyUI_JR_IndexTTS25/issues"
 
 [tool.comfy]
 DisplayName = "ComfyUI JR IndexTTS 2.5"
