@@ -4,3 +4,4 @@
 *.toml text eol=lf
 *.txt text eol=lf
 *.patch text eol=lf whitespace=-trailing-space,-blank-at-eof
+index_tts/** whitespace=-trailing-space,-blank-at-eof linguist-vendored=true

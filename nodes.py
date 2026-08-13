@@ -101,6 +101,7 @@ class JR_IndexTTS25_Loader:
         return {
             "required": {
                 "model_path_override": ("STRING", {"default": ""}),
+                "download_model": ("BOOLEAN", {"default": False}),
                 "source_path_override": ("STRING", {"default": ""}),
                 "device": ("STRING", {"default": "cuda:0"}),
                 "precision": (["fp32", "bf16"], {"default": "fp32"}),
@@ -114,15 +115,27 @@ class JR_IndexTTS25_Loader:
     FUNCTION = "load"
     CATEGORY = CATEGORY
 
-    def load(self, model_path_override, source_path_override, device, precision, enable_qwen_emotion, strict_environment):
+    def load(
+        self,
+        model_path_override,
+        download_model,
+        source_path_override,
+        device,
+        precision,
+        enable_qwen_emotion,
+        strict_environment,
+    ):
+        progress_bar = _new_progress_bar()
         return (
             load_model(
                 model_path_override=model_path_override,
+                download_model=download_model,
                 source_path_override=source_path_override,
                 device=device,
                 precision=precision,
                 enable_qwen_emotion=enable_qwen_emotion,
                 strict_environment=strict_environment,
+                progress_callback=_progress_callback(progress_bar),
             ),
         )
 

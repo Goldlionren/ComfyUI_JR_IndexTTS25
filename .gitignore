@@ -7,7 +7,6 @@ __pycache__/
 .venv/
 venv/
 .cache/
-index_tts/
 voice_presets/
 *.wav
 *.flac

@@ -31,8 +31,10 @@ MODEL_FILES = (
     "multilingual_zh_ja_yue_char_del.tiktoken",
     "wav2vec2bert_stats.pt",
 )
+MODEL_REPO_ID = "IndexTeam/IndexTTS-2.5"
 MODEL_CACHE: dict[tuple[str, str, bool, bool, str], "IndexTTS25Handle"] = {}
 MODEL_CACHE_LOCK = threading.RLock()
+MODEL_DOWNLOAD_LOCK = threading.RLock()
 EMOTION_NAMES = (
     "happy",
     "angry",
@@ -194,6 +196,91 @@ def resolve_model_dir(override: str = "") -> Path:
     )
 
 
+def _default_model_download_dir() -> Path:
+    try:
+        import folder_paths
+
+        return (Path(folder_paths.models_dir) / "IndexTTS-2.5").resolve()
+    except Exception:
+        return (_plugin_root().parent / "models" / "IndexTTS-2.5").resolve()
+
+
+def model_download_dir(override: str = "") -> Path:
+    value = (override or "").strip()
+    return Path(value).expanduser().resolve() if value else _default_model_download_dir()
+
+
+def missing_model_files(model_dir: Path) -> list[str]:
+    return [name for name in MODEL_FILES if not (model_dir / name).is_file()]
+
+
+def _download_model_snapshot(source_dir: Path, target_dir: Path) -> None:
+    source_text = str(source_dir)
+    if source_text not in sys.path:
+        sys.path.insert(0, source_text)
+    downloader = importlib.import_module("indextts.utils.model_download")
+    downloader.snapshot_download(MODEL_REPO_ID, local_dir=str(target_dir))
+
+
+def ensure_model_available(
+    model_path_override: str = "",
+    source_dir: Path | None = None,
+    *,
+    download_model: bool = False,
+    progress_callback: Callable[[float, str], None] | None = None,
+) -> Path:
+    override = (model_path_override or "").strip()
+    if override:
+        explicit_target = model_download_dir(override)
+        if not missing_model_files(explicit_target):
+            return explicit_target
+    else:
+        # Preserve discovery of an already-complete environment/configured model.
+        try:
+            return resolve_model_dir("")
+        except FileNotFoundError:
+            pass
+
+    target_dir = model_download_dir(model_path_override)
+    missing = missing_model_files(target_dir)
+    if not download_model:
+        raise FileNotFoundError(
+            f"IndexTTS-2.5 model is incomplete at {target_dir} (missing: {', '.join(missing)}). "
+            "Enable download_model in Loader to download it, or set model_path_override "
+            "to an existing complete model directory."
+        )
+    if source_dir is None:
+        raise ValueError("source_dir is required to download the official IndexTTS-2.5 model")
+
+    with MODEL_DOWNLOAD_LOCK:
+        # A parallel Loader may have completed the same target while this one waited.
+        missing = missing_model_files(target_dir)
+        if not missing:
+            return target_dir
+        if target_dir.exists() and not target_dir.is_dir():
+            raise NotADirectoryError(f"Model download target is not a directory: {target_dir}")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if progress_callback is not None:
+            progress_callback(0.01, f"downloading {MODEL_REPO_ID} to {target_dir}")
+        try:
+            _download_model_snapshot(source_dir, target_dir)
+        except Exception as error:
+            raise RuntimeError(
+                f"Failed to download {MODEL_REPO_ID} to {target_dir}: "
+                f"{type(error).__name__}: {error}"
+            ) from error
+
+        missing = missing_model_files(target_dir)
+        if missing:
+            raise RuntimeError(
+                f"Model download finished but {target_dir} is still incomplete "
+                f"(missing: {', '.join(missing)}). Existing files were preserved."
+            )
+        if progress_callback is not None:
+            progress_callback(0.08, "model download complete")
+        return target_dir
+
+
 def assert_runtime_compatible(strict: bool = True) -> dict[str, Any]:
     info = runtime_diagnostics()
     errors: list[str] = []
@@ -227,10 +314,19 @@ def load_model(
     precision: str = "fp32",
     enable_qwen_emotion: bool = False,
     strict_environment: bool = True,
+    download_model: bool = False,
+    progress_callback: Callable[[float, str], None] | None = None,
 ) -> IndexTTS25Handle:
     assert_runtime_compatible(strict=strict_environment)
-    model_dir = resolve_model_dir(model_path_override)
     source_dir = resolve_source_dir(source_path_override)
+    model_dir = ensure_model_available(
+        model_path_override,
+        source_dir,
+        download_model=download_model,
+        progress_callback=progress_callback,
+    )
+    if progress_callback is not None:
+        progress_callback(0.1, "loading IndexTTS-2.5 model")
     use_bf16 = precision.lower() == "bf16"
     if precision.lower() not in {"fp32", "bf16"}:
         raise ValueError(f"Unsupported precision: {precision}")
@@ -240,6 +336,8 @@ def load_model(
     with MODEL_CACHE_LOCK:
         cached = MODEL_CACHE.get(key)
         if cached is not None:
+            if progress_callback is not None:
+                progress_callback(1.0, "model loaded from cache")
             return cached
         runtime_class = _import_runtime(source_dir)
         runtime = runtime_class(
@@ -263,6 +361,8 @@ def load_model(
             cache_key=key,
         )
         MODEL_CACHE[key] = handle
+        if progress_callback is not None:
+            progress_callback(1.0, "model loaded")
         return handle
 
 

@@ -2,9 +2,9 @@
 
 IndexTTS-2.5 的 ComfyUI 原生节点。插件在 ComfyUI 进程内加载官方模型，输出标准 `AUDIO`，支持持久化声模、四种情绪控制、多人台词、逐句情绪标签、LLM 发音标注、长文本参数和生成进度。
 
-当前首版：`v0.1.0`
+当前版本：`v0.2.0`
 
-> 这是一个针对特定新运行栈完成兼容开发和真实 GPU 推理验证的版本：Windows、NVIDIA CUDA、Python 3.13.11、PyTorch 2.11.0+cu130。模型和官方源码不会自动下载。插件也不会自动安装、升级或替换 ComfyUI 的 Torch、Transformers、NumPy 等核心包。
+> 这是一个针对特定新运行栈完成兼容开发和真实 GPU 推理验证的版本：Windows、NVIDIA CUDA、Python 3.13.11、PyTorch 2.11.0+cu130。兼容后的官方运行源码已随插件提供，用户不需要再次克隆或手动打补丁；模型仅在 Loader 明确开启 `download_model` 后下载。插件不会自动安装、升级或替换 ComfyUI 的 Torch、Transformers、NumPy 等核心包。
 
 ## 功能一览
 
@@ -17,6 +17,8 @@ IndexTTS-2.5 的 ComfyUI 原生节点。插件在 ComfyUI 进程内加载官方�
 - 最多 10 路声模的多人台词与逐句情绪覆盖
 - `do_sample`、temperature、top-p、top-k、beam 等高级采样参数
 - 长文本分段参数与 ComfyUI 进度条
+- 内置已验证、已打兼容补丁的 IndexTTS-2.5 运行源码
+- Loader 可选下载官方模型到默认或自定义目录
 - 模型缓存查看、单模型卸载、全部卸载
 
 全部节点位于 `JR/Audio/IndexTTS 2.5` 分类，共 9 个。
@@ -55,30 +57,23 @@ ComfyUI/
       ├─ __init__.py
       ├─ nodes.py
       ├─ backend/
+      ├─ index_tts/          # 已兼容的官方运行源码
       └─ patches/
 ```
 
 如果目标目录已经存在，请先备份或用 Git 正常更新，不要把新版直接覆盖到混合目录中。
 
-### 2. 准备官方 IndexTTS-2.5 源码
+### 2. 官方 IndexTTS-2.5 源码已经内置
 
-推荐把源码放到插件内的 `index_tts`：
+无需再执行第二次 `git clone`，也无需手动应用补丁。插件自带的 `index_tts` 目录包含完整运行包，并已应用 Python 3.13 / Torch 2.11 / Transformers 兼容层、SoundFile WAV 写入、进度回调、采样参数透传和阿拉伯语归一化修复。
 
-```powershell
-cd ComfyUI\custom_nodes\ComfyUI_JR_IndexTTS25
-git clone https://github.com/index-tts/index-tts.git index_tts
-cd index_tts
-git checkout a371df7d0746a0ae7fdf075798b6b04e34a0132e
-git am ..\patches\0001-Add-Python-3.13-and-Torch-2.11-compatibility.patch ..\patches\0002-Fix-sampling-control-and-Arabic-normalization.patch
-```
+Loader 的 `source_path_override` 默认留空即可。它只保留给开发者测试其他源码版本；若显式填写，应指向另一个包含 `indextts/infer_v2_5.py` 的源码根目录。不要对内置源码执行 `pip install .`，否则其依赖解析可能改动真实 ComfyUI 环境。
 
-补丁提供本项目所需的 Python 3.13 / Torch 2.11 / Transformers 兼容层、SoundFile WAV 写入、进度回调、采样参数透传和阿拉伯语归一化分支。不要对官方源码执行 `pip install .`，否则其依赖解析可能改动真实 ComfyUI 环境。
+内置源码固定在上游基线 `a371df7`，最终兼容 revision 为 `30fecfa`。详细来源、修改说明和许可证见 `index_tts/VENDORED_SOURCE.md`、`index_tts/LICENSE` 与 `index_tts/LICENSE_ZH.txt`。
 
-也可以把源码放在其他位置，然后填写 Loader 的 `source_path_override`，或设置环境变量 `INDEXTTS25_SOURCE`。
+### 3. 准备或下载模型
 
-### 3. 准备模型
-
-插件不下载模型。把完整 IndexTTS-2.5 权重放到以下任一位置：
+已有完整模型时，把它放到以下任一位置：
 
 ```text
 ComfyUI/models/IndexTTS-2.5/
@@ -99,7 +94,16 @@ IndexTTS-2.5/
 └─ qwen0.6bemo4-merge/        # 仅 builtin_qwen 情绪后端需要
 ```
 
-模型在别处时，填写 Loader 的 `model_path_override`，或设置 `INDEXTTS25_MODEL_DIR`。插件只读取模型，不移动大模型，也不改变目录结构。
+模型在别处时，填写 Loader 的 `model_path_override`，或设置 `INDEXTTS25_MODEL_DIR`。插件不会移动已有大模型，也不会改变已有目录结构。
+
+没有模型时，在 Loader 中开启 `download_model`，然后运行工作流：
+
+- `model_path_override` 已填写：下载到该目录；
+- `model_path_override` 留空：下载到 `ComfyUI/models/IndexTTS-2.5`；
+- 目标已有完整模型：直接复用，不重复下载；
+- 目标只有部分文件：保留已有文件，由官方下载器继续补全，结束后验证核心文件。
+
+下载源为官方仓库 `IndexTeam/IndexTTS-2.5`，会占用数 GB 磁盘并需要网络。下载开关默认关闭；执行下载即表示使用者自行确认并接受上游模型许可证。这个动作只下载模型文件，不会执行 `pip install`，也不会修改 ComfyUI Python 环境。插件会直接使用内置源码中的官方下载器。
 
 ### 4. 依赖边界
 
@@ -111,6 +115,12 @@ IndexTTS-2.5/
 - `requirements-japanese.txt`：仅日文分词/发音需要；缺少 fugashi/MeCab 不影响中文和英文。
 
 本仓库不会在节点执行时自动安装任何包。
+
+## 内置源码与许可证
+
+本插件分发了经过兼容修改的 IndexTTS 运行源码，并保留上游许可证与免责声明。使用、复制和再分发受到 `index_tts/LICENSE` 和 `index_tts/LICENSE_ZH.txt` 约束；中英文冲突时以中文版本为准。
+
+Any modifications made to the original model in this Derivative Work are not endorsed, warranted, or guaranteed by the original right-holder of the original model, and the original right-holder disclaims all liability related to this Derivative Work.
 
 ## 最快上手
 
@@ -140,8 +150,9 @@ JR IndexTTS 2.5 Loader ───────────────────
 
 | 参数 | 含义 |
 |---|---|
-| `model_path_override` | 模型目录的显式绝对路径。留空时自动搜索。 |
-| `source_path_override` | 已应用兼容补丁的官方源码根目录。根目录内必须有 `indextts/infer_v2_5.py`。 |
+| `model_path_override` | 模型目录的显式路径。留空时先搜索已有模型；需要下载时默认目标为 `ComfyUI/models/IndexTTS-2.5`。 |
+| `download_model` | 明确开启后，若目标缺少核心模型文件，则从官方 `IndexTeam/IndexTTS-2.5` 下载并补全；默认关闭。 |
+| `source_path_override` | 默认留空，自动使用插件内置的 `index_tts`。仅在开发/调试其他源码时填写；根目录内必须有 `indextts/infer_v2_5.py`。 |
 | `device` | 推理设备，默认 `cuda:0`。 |
 | `precision` | `fp32` 或 `bf16`。BF16 主要作用于 GPT 部分，并要求 GPU 支持。 |
 | `enable_qwen_emotion` | 是否随主模型加载官方内置 QwenEmotion。使用 llama.cpp 情绪后端时应关闭，以节省显存。 |
@@ -389,11 +400,13 @@ Generate 和 Multi-Talk Generate 都提供以下参数：
 4. `ComfyUI/models/indextts/IndexTTS-2.5`
 5. 开发工作区相邻的 `models/IndexTTS-2.5`
 
+当 `download_model=true` 时，填写了 `model_path_override` 就以该路径为下载目标；留空则固定下载到 `ComfyUI/models/IndexTTS-2.5`。环境变量和其他搜索位置只用于复用已经完整的模型，不会改变留空时的默认下载目标。
+
 源码目录：
 
 1. Loader `source_path_override`
 2. `INDEXTTS25_SOURCE`
-3. `ComfyUI_JR_IndexTTS25/index_tts`
+3. `ComfyUI_JR_IndexTTS25/index_tts`（默认内置）
 4. 开发工作区相邻的 `source/index-tts`
 
 缓存目录可用 `INDEXTTS25_CACHE_DIR` 指定。默认放在 ComfyUI 临时目录下，Numba 缓存不会写入真实 ComfyUI Python 的 `site-packages`。
@@ -402,7 +415,9 @@ Generate 和 Multi-Talk Generate 都提供以下参数：
 
 ### Loader 显示找不到模型或源码
 
-检查填写的是目录而不是某个 `.pth` 文件。`model_path_override` 应指向同时包含 `config.yaml`、`gpt.pth`、`s2mel.pth` 和其他必需文件的 `IndexTTS-2.5` 根目录；`source_path_override` 应指向包含 `indextts` 文件夹的源码根目录。
+检查填写的是目录而不是某个 `.pth` 文件。`model_path_override` 应指向同时包含 `config.yaml`、`gpt.pth`、`s2mel.pth` 和其他必需文件的 `IndexTTS-2.5` 根目录。正常安装不需要填写 `source_path_override`；如果显式覆盖，它应指向包含 `indextts` 文件夹的源码根目录。
+
+如果尚未下载模型，可开启 Loader 的 `download_model` 后重新运行。下载失败不会清空目标目录，已经完成的文件会保留，修复网络或磁盘问题后可以再次运行。若报缺少源码，请确认 Git 克隆完整且插件内存在 `index_tts/indextts/infer_v2_5.py`，不要通过节点安装 Python 包。
 
 ### 新参数或新节点没有出现
 
@@ -429,7 +444,7 @@ Windows 环境中 NeMo/Pynini 并非默认依赖。插件的兼容源码会在 N
 
 ### TorchAudio 保存 WAV 报 TorchCodec/FFmpeg DLL 错误
 
-本项目兼容补丁已把官方推理的 WAV 写入改为 SoundFile PCM16。请确认应用了 `patches` 中的两个补丁，不要通过升级/降级 TorchAudio 来绕过。
+本项目内置兼容源码已把官方推理的 WAV 写入改为 SoundFile PCM16。请确认插件的 `index_tts` 目录完整，不要通过升级/降级 TorchAudio 来绕过。
 
 ## 已知边界
 
@@ -438,7 +453,7 @@ Windows 环境中 NeMo/Pynini 并非默认依赖。插件的兼容源码会在 N
 - 日文需要额外分词依赖；中文、英文不依赖它。
 - 西班牙语/阿拉伯语在缺少 NeMo 时会跳过高级文本归一化。
 - 进度是阶段级进度，不是逐 token 进度。
-- 模型权重、官方源码和声音数据不包含在本仓库中。
+- 模型权重和声音数据不包含在本仓库中；兼容后的官方运行源码已经内置。
 
 ## 致谢与上游
 
@@ -446,6 +461,12 @@ Windows 环境中 NeMo/Pynini 并非默认依赖。插件的兼容源码会在 N
 - ComfyUI：<https://github.com/comfyanonymous/ComfyUI>
 
 本项目是独立的 ComfyUI 集成与兼容层。请同时遵守上游源码、模型权重和参考音频各自的许可及使用条款。
+
+## v0.2.0
+
+- Loader 增加明确选择的官方模型下载开关和默认 ComfyUI 模型目录。
+- 内置固定 revision、已验证并已应用兼容修改的 IndexTTS 运行源码。
+- 新用户无需第二次克隆源码、无需手动应用补丁，`source_path_override` 默认留空。
 
 ## v0.1.0
 
