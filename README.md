@@ -1,16 +1,14 @@
 # ComfyUI_JR_IndexTTS25
 
-> **Intel XPU test branch:** Ubuntu 24.04 + Python 3.13 + PyTorch 2.11.0+xpu
-> on Arc A770 and Arc Pro B60 is currently a controlled candidate, not yet a
-> stable compatibility claim. Use `device=xpu:0`, start with FP32, and follow
-> [compatibility/xpu/README_zh.md](compatibility/xpu/README_zh.md). The stable
-> NVIDIA CUDA runtime and its exact package checks remain unchanged.
+> 同一套插件代码同时支持 NVIDIA CUDA 和 Intel XPU。两种平台使用不同的
+> PyTorch wheel 和独立的 ComfyUI Python 环境，不能在同一环境中互相替换。
 
 IndexTTS-2.5 的 ComfyUI 原生节点。插件直接在 ComfyUI 进程内加载模型并输出标准 `AUDIO`，支持声音克隆、持久化声模、四种情绪控制、多人台词、小说转角色脚本、逐句情绪、LLM 发音标注、长文本和生成进度。
 
-当前版本：`v0.3.1`
+当前版本：`v0.5.0`
 
-> 已验证目标环境：Windows、NVIDIA CUDA、Python 3.13.11、PyTorch 2.11.0+cu130、Torch CUDA 13.0。兼容后的 IndexTTS 运行源码已经内置，普通用户不需要再次下载源码或应用补丁。
+> 已验证基线包括 Windows + NVIDIA CUDA，以及 Ubuntu 24.04 + Intel Arc XPU。
+> 兼容后的 IndexTTS 运行源码已经内置，普通用户不需要再次下载源码或应用补丁。
 
 ## 目录
 
@@ -64,18 +62,18 @@ IndexTTS-2.5 的 ComfyUI 原生节点。插件直接在 ComfyUI 进程内加载�
 
 ### 1. 运行环境
 
-严格模式检查：
+严格模式根据 Loader 的 `device` 检查对应环境：
 
-| 项目 | 需要的版本 |
-|---|---|
-| 系统 | Windows |
-| Python | 3.13.11 |
-| PyTorch | 2.11.0+cu130 |
-| TorchAudio | 2.11.0+cu130 |
-| Torch CUDA | 13.0 |
-| GPU | NVIDIA CUDA GPU |
+| 平台 | 系统 | Python | PyTorch / TorchAudio | Loader `device` |
+|---|---|---|---|---|
+| NVIDIA CUDA | Windows 或 Linux x86-64 | 3.12 或 3.13 | `2.11.0+cu130`，Torch CUDA 13.0 | `cuda:0` |
+| Intel XPU | Ubuntu 24.04 x86-64 | 3.12 或 3.13 | `2.11.0+xpu` | `xpu:0` |
 
-`strict_environment=false` 只关闭版本拦截，不代表其他版本已经兼容。遇到版本错误时，不要直接降级或升级 Torch、Transformers、NumPy。
+当前真实验收基线是 Windows 11 + Python 3.13.11 + RTX 5090，以及 Ubuntu
+24.04 + Python 3.13 + Intel Arc A770 / Arc Pro B60。Intel XPU 详细检查和证据探针见
+[`compatibility/xpu/README_zh.md`](compatibility/xpu/README_zh.md)。
+
+`strict_environment=false` 只关闭版本拦截，不代表其他版本已经兼容。遇到版本错误时，不要直接降级或升级 Torch、Transformers、NumPy。特别不要在已经工作的 CUDA 环境中安装 XPU wheel，或在 XPU 环境中安装 CUDA wheel。
 
 ### 2. 磁盘和网络
 
@@ -141,6 +139,12 @@ ComfyUI-aki-v3 示例，在整合包根目录执行：
 .\venv\Scripts\python.exe -m pip install -r .\custom_nodes\ComfyUI_JR_IndexTTS25\requirements.txt
 ```
 
+Ubuntu 虚拟环境通常类似：
+
+```bash
+./venv/bin/python -m pip install -r custom_nodes/ComfyUI_JR_IndexTTS25/requirements.txt
+```
+
 上面三条命令只选择与你的目录结构匹配的一条。根 `requirements.txt` 不声明 Torch、TorchAudio、TorchVision、Transformers、Tokenizers、NumPy 或 Safetensors，避免主动替换 ComfyUI 核心栈。
 
 可选依赖（下面以 ComfyUI-aki-v3 为例；其他安装只替换 Python 路径）：
@@ -159,13 +163,27 @@ ComfyUI-aki-v3 示例，在整合包根目录执行：
 
 ## 第一次运行：自动下载模型
 
-新用户不需要填写任何源码路径。添加 `JR IndexTTS 2.5 Loader`，推荐首次设置：
+新用户不需要填写任何源码路径。添加 `JR IndexTTS 2.5 Loader`，推荐首次设置如下。
+
+NVIDIA：
 
 ```text
 model_path_override: 留空
 download_model: true
 source_path_override: 留空
 device: cuda:0
+precision: fp32
+enable_qwen_emotion: false
+strict_environment: true
+```
+
+Intel Arc XPU：
+
+```text
+model_path_override: 留空
+download_model: true
+source_path_override: 留空
+device: xpu:0
 precision: fp32
 enable_qwen_emotion: false
 strict_environment: true
@@ -295,12 +313,12 @@ Load Voice Preset（旁白、紫灵等）─────────────
 | `model_path_override` | 留空 | 留空时搜索已有模型；下载时默认 `ComfyUI/models/IndexTTS-2.5`。填写时必须指向模型根目录。 |
 | `download_model` | 首次开启 | 目标不完整时从官方仓库下载并补全；默认关闭。完整模型不会重复下载。 |
 | `source_path_override` | 留空 | 自动使用插件内置 `index_tts`。仅开发者测试其他源码时填写。 |
-| `device` | `cuda:0` | 第一块 NVIDIA GPU。多卡可尝试 `cuda:1`。 |
+| `device` | 按平台选择 | NVIDIA 使用 `cuda:0`，Intel Arc 使用 `xpu:0`；多卡按实际索引改为 `:1`。默认值是 `cuda:0`。 |
 | `precision` | 先用 `fp32` | `bf16` 主要作用于 GPT 部分，不代表整个模型都转换为 BF16。 |
 | `enable_qwen_emotion` | `false` | 只有 Emotion Control 使用 `builtin_qwen` 时开启；会增加显存占用。 |
-| `strict_environment` | `true` | 检查目标 Python、Torch、CUDA 和 GPU。关闭不代表其他版本已兼容。 |
+| `strict_environment` | `true` | 按 `device` 检查 Python、Torch、CUDA/XPU 和 GPU。关闭不代表其他版本已兼容。 |
 
-相同设置会复用进程内模型缓存。Windows 基线主动关闭 CUDA kernel JIT、DeepSpeed、第三方 flash-attn accel 和 `torch.compile`，优先保证稳定。
+相同设置会复用进程内模型缓存。稳定基线主动关闭 CUDA kernel JIT、DeepSpeed、第三方 flash-attn accel 和 `torch.compile`，优先保证 CUDA/XPU 一致性。
 
 ### 2. JR IndexTTS 2.5 Voice Preset
 
@@ -669,7 +687,7 @@ ComfyUI/models/indextts/voice_presets
 
 ### Loader 报环境版本不兼容
 
-先用 Runtime Diagnostics 查看 Python、Torch 和 Torch CUDA。目标是 Python 3.13.11、Torch 2.11.0+cu130、CUDA 13.0。不要把 `strict_environment=false` 当作通用修复。
+先用 Runtime Diagnostics 查看 Python、Torch 和加速后端。NVIDIA 目标是 Torch/TorchAudio 2.11.0+cu130 与 Torch CUDA 13.0；Intel 目标是 Torch/TorchAudio 2.11.0+xpu 且 `torch.xpu.is_available()` 为真。不要把 `strict_environment=false` 当作通用修复，也不要混装两种 PyTorch wheel。
 
 ### Loader 报找不到源码
 
@@ -730,7 +748,7 @@ Windows 环境中 NeMo/Pynini 不是默认依赖。内置兼容源码会在 NeMo
 
 插件内置源码已经使用 SoundFile PCM16 写入，不应通过升级/降级 TorchAudio 解决。确认没有用 `source_path_override` 指向未打补丁的官方源码。
 
-### CUDA 显存不足
+### GPU 显存不足
 
 依次尝试：
 
@@ -746,7 +764,10 @@ Windows 环境中 NeMo/Pynini 不是默认依赖。内置兼容源码会在 NeMo
 
 ## 已知边界
 
-- 已声明兼容目标是 Windows + Python 3.13.11 + Torch 2.11.0+cu130；其他组合尚未承诺。
+- NVIDIA 与 Intel 使用同一插件代码，但必须使用各自独立、匹配的 PyTorch 环境。
+- Intel XPU 正式基线是 Ubuntu 24.04 + Arc A770 / Arc Pro B60；Windows XPU 尚未列入兼容范围。
+- XPU 首版不启用 CUDA kernel、DeepSpeed、第三方 flash-attn accel 或 `torch.compile`。
+- XPU 的内置 `builtin_qwen` 不属于首版验收门槛；外部 llama.cpp 情绪分析不受影响。
 - `builtin_qwen` 增加模型加载时间和显存占用，默认推荐外部 llama.cpp。
 - 日文需要可选分词依赖；中文和英文不依赖它。
 - 西班牙语和阿拉伯语缺少 NeMo 时跳过高级文本归一化。
@@ -778,6 +799,15 @@ Any modifications made to the original model in this Derivative Work are not end
 - 最终兼容 revision：`30fecfa188455a560aeea6f6dc60bc2f7c19bb14`
 
 ## 更新记录
+
+### v0.5.0
+
+- 主分支统一支持 NVIDIA CUDA 与 Intel Arc XPU，不再要求用户切换插件代码分支。
+- 新增 Ubuntu 24.04 + Python 3.13 + Torch/TorchAudio 2.11.0+xpu 运行矩阵。
+- Loader 支持 `xpu:0`，并加入 XPU 缓存、随机种子、BF16、显存和多卡诊断。
+- 参考音频 Mel/Kaldi 预处理固定在 CPU，降低 XPU 音频算子兼容风险。
+- 新增 A770 / Arc Pro B60 真实推理证据探针，并补齐 `munch`、`matplotlib` 运行依赖。
+- 保持 Windows + Python 3.13.11 + Torch 2.11.0+cu130 CUDA 稳定基线。
 
 ### v0.3.1
 

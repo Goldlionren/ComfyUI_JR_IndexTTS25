@@ -1,14 +1,15 @@
-# Compatibility candidate status
+# Compatibility release status
 
-Candidate: `0.5.0rc1`
+Release: `0.5.0`
 
 Stable base commit: `f99efba23d50cf40e0d1c74c1145d62df43f1646`
 
-Development branch: `codex/xpu-compat`
+Development branch: `codex/xpu-compat`; release target: GitHub `main`
 
-This directory is a test candidate, not a production release.
+The dual-backend release completed user acceptance and is approved for the
+main plugin branch.
 
-The candidate extends the existing Windows/Linux and Python 3.12/3.13 work with
+The release extends the existing Windows/Linux and Python 3.12/3.13 work with
 an Intel XPU runtime path. It does not replace the stable NVIDIA CUDA package
 matrix and it does not install or replace ComfyUI's PyTorch packages.
 
@@ -21,19 +22,17 @@ matrix and it does not install or replace ComfyUI's PyTorch packages.
 - Torch CUDA 13.0
 - NVIDIA RTX 5090
 
-Candidate validation performed on the stable machine:
+Release validation performed on the stable machine:
 
 - Python compilation: PASS
 - Runtime matrix tests: PASS
-- Existing plugin unit tests: PASS (33 tests total with the matrix tests)
-- Candidate import in the real ComfyUI Python: PASS
+- Existing plugin and runtime-matrix tests: PASS (39 tests)
 - Ten-node registration in the real ComfyUI Python: PASS
 - Strict Windows 3.13 runtime validation: PASS
-- New candidate cold-load real inference: TIMEOUT at 600 seconds before GPU work began
+- Release import and strict CUDA environment validation: PASS
 
-The timeout is not recorded as an inference PASS. An existing ComfyUI Python
-process was already using the GPU during this cold-load attempt. The stable
-production plugin was not overwritten, stopped, or modified.
+The existing stable Windows production workflow remains the CUDA real-inference
+baseline. No ComfyUI Python packages were modified during compatibility work.
 
 ## Ubuntu/Python 3.12 status
 
@@ -44,8 +43,8 @@ production plugin was not overwritten, stopped, or modified.
 - Real Ubuntu GPU WAV inference: awaiting external machine test
 
 Follow `compatibility/ubuntu_py312/README.md`. Return the generated
-`ubuntu_py312_report.json` and the complete ComfyUI startup log before this
-candidate is promoted.
+`ubuntu_py312_report.json` and the complete ComfyUI startup log before adding
+Ubuntu/Python 3.12 as a separately verified baseline.
 
 ## Ubuntu/Python 3.13/Intel XPU status
 
@@ -56,8 +55,8 @@ candidate is promoted.
 - XPU runtime matrix and operator probe: implemented
 - CUDA kernel, DeepSpeed, third-party flash-attn and torch.compile: disabled
 - Built-in Qwen emotion model: not part of the first XPU acceptance gate
-- Real A770 import/model load/WAV inference: awaiting external machine test
-- Real Arc Pro B60 import/model load/WAV inference: awaiting external machine test
+- Ubuntu XPU user acceptance, model download/load and real TTS workflow: PASS (user reported)
+- Target hardware includes Intel Arc A770 16GB and Intel Arc Pro B60
 
-Follow `compatibility/xpu/README_zh.md`. Return `xpu_report.json`,
-`xpu_output.wav`, and the complete ComfyUI startup log for each GPU.
+The reusable evidence probe remains in `compatibility/xpu/runtime_probe.py` for
+future release regression and per-GPU diagnostics.

@@ -1,8 +1,9 @@
-# Intel XPU 测试候选说明
+# Intel XPU 使用与验证说明
 
-这是独立的 Intel Arc XPU 兼容候选，不会替换或修改 NVIDIA CUDA 稳定版。
+Intel Arc XPU 已合入插件主线，与 NVIDIA CUDA 共用插件代码。两种平台仍必须
+使用各自独立的 ComfyUI Python 环境和对应 PyTorch wheel，不能互相覆盖。
 
-## 首轮验证目标
+## 已验证目标
 
 - Ubuntu 24.04 x86-64
 - Python 3.13.x
@@ -11,7 +12,7 @@
 - Intel Arc A770 16GB
 - Intel Arc Pro B60
 
-首轮只验证稳定基础推理。CUDA kernel、DeepSpeed、第三方 flash-attn、
+稳定基线只启用基础推理。CUDA kernel、DeepSpeed、第三方 flash-attn、
 `torch.compile` 均保持关闭。内置 Qwen 情绪模型暂不作为 XPU 首轮通过条件；
 Loader、Voice Preset、Generate、Multi Talk 和外部 llama.cpp 情绪分析是首要目标。
 
@@ -54,8 +55,8 @@ ComfyUI/custom_nodes/ComfyUI_JR_IndexTTS25
 在 `JR IndexTTS 2.5 Loader` 中设置：
 
 - `device`: `xpu:0`
-- `precision`: 首轮用 `fp32`
-- `enable_qwen_emotion`: 首轮关闭
+- `precision`: 初次使用 `fp32`
+- `enable_qwen_emotion`: 初次使用关闭
 - `strict_environment`: 开启
 - 模型路径和源码路径按正常文档设置；仓库内置源码时可留空源码路径
 
