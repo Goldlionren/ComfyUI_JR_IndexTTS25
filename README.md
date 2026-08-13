@@ -1,54 +1,99 @@
 # ComfyUI_JR_IndexTTS25
 
-IndexTTS-2.5 的 ComfyUI 原生节点。插件在 ComfyUI 进程内加载官方模型，输出标准 `AUDIO`，支持持久化声模、四种情绪控制、多人台词、逐句情绪标签、LLM 发音标注、长文本参数和生成进度。
+IndexTTS-2.5 的 ComfyUI 原生节点。插件直接在 ComfyUI 进程内加载模型并输出标准 `AUDIO`，支持声音克隆、持久化声模、四种情绪控制、多人台词、逐句情绪、LLM 发音标注、长文本和生成进度。
 
 当前版本：`v0.2.0`
 
-> 这是一个针对特定新运行栈完成兼容开发和真实 GPU 推理验证的版本：Windows、NVIDIA CUDA、Python 3.13.11、PyTorch 2.11.0+cu130。兼容后的官方运行源码已随插件提供，用户不需要再次克隆或手动打补丁；模型仅在 Loader 明确开启 `download_model` 后下载。插件不会自动安装、升级或替换 ComfyUI 的 Torch、Transformers、NumPy 等核心包。
+> 已验证目标环境：Windows、NVIDIA CUDA、Python 3.13.11、PyTorch 2.11.0+cu130、Torch CUDA 13.0。兼容后的 IndexTTS 运行源码已经内置，普通用户不需要再次下载源码或应用补丁。
 
-## 功能一览
+## 目录
 
-- 单人零样本声音克隆与 `AUDIO` 输出
-- 声模首次登记、稳定 ID、名称、音频数据和持久化管理
-- 手动情绪向量、情绪参考音频、台词自动情绪分析、独立情绪描述
-- llama.cpp / OpenAI-compatible API 情绪分析，不占用 IndexTTS 内置 Qwen 的显存
-- 可选官方内置 QwenEmotion
-- 中文、英文、日文的 LLM 发音标注
-- 最多 10 路声模的多人台词与逐句情绪覆盖
-- `do_sample`、temperature、top-p、top-k、beam 等高级采样参数
-- 长文本分段参数与 ComfyUI 进度条
-- 内置已验证、已打兼容补丁的 IndexTTS-2.5 运行源码
-- Loader 可选下载官方模型到默认或自定义目录
-- 模型缓存查看、单模型卸载、全部卸载
+- [功能与节点](#功能与节点)
+- [安装前确认](#安装前确认)
+- [安装插件](#安装插件)
+- [第一次运行：自动下载模型](#第一次运行自动下载模型)
+- [第一个声音克隆工作流](#第一个声音克隆工作流)
+- [以后直接加载声模](#以后直接加载声模)
+- [九个节点完整说明](#九个节点完整说明)
+- [多人台词语法](#多人台词语法)
+- [采样与长文本参数](#采样与长文本参数)
+- [路径与文件位置](#路径与文件位置)
+- [更新插件](#更新插件)
+- [常见问题](#常见问题)
+- [许可证与上游](#许可证与上游)
 
-全部节点位于 `JR/Audio/IndexTTS 2.5` 分类，共 9 个。
+## 功能与节点
 
-## 运行环境
+全部节点位于 `JR/Audio/IndexTTS 2.5`，共 9 个：
 
-严格模式验证以下环境：
+| 节点 | 用途 | 输出 |
+|---|---|---|
+| JR IndexTTS 2.5 Loader | 下载、加载和缓存模型 | `JR_INDEXTTS25_MODEL` |
+| JR IndexTTS 2.5 Voice Preset | 从参考音频登记声模 | `JR_INDEXTTS25_VOICE` |
+| JR IndexTTS 2.5 Load Voice Preset | 无需参考音频，加载已保存声模 | `JR_INDEXTTS25_VOICE` |
+| JR IndexTTS 2.5 Voice Preset Manager | 列出、查看、改名或删除声模 | `STRING` JSON |
+| JR IndexTTS 2.5 Emotion Control | 手动、参考音频或文本情绪 | `JR_INDEXTTS25_EMOTION` |
+| JR IndexTTS 2.5 Pronunciation Enhance (LLM) | 用 LLM 添加官方发音标注 | `STRING` |
+| JR IndexTTS 2.5 Generate | 单声音合成 | `AUDIO` |
+| JR IndexTTS 2.5 Multi-Talk Generate | 最多 10 个声音的多人合成 | `AUDIO` |
+| JR IndexTTS 2.5 Runtime Diagnostics | 查看环境、缓存或卸载模型 | `STRING` JSON |
 
-| 项目 | 已验证值 |
+主要能力：
+
+- 中文、英文、日文、阿拉伯文和西班牙文合成
+- 零样本声音克隆和持久化声模库
+- 手动八维情绪、情绪参考音频、台词自动分析、独立情绪描述
+- llama.cpp / OpenAI-compatible API 情绪分析
+- 可选的官方内置 QwenEmotion
+- 中文、英文、日文 LLM 发音增强
+- 多人台词与逐句情绪标签
+- `do_sample`、temperature、top-p、top-k、beam 等官方生成参数
+- 长文本切段、段间静音和 ComfyUI ProgressBar
+- 模型缓存查看、单模型卸载和全部卸载
+
+## 安装前确认
+
+### 1. 运行环境
+
+严格模式检查：
+
+| 项目 | 需要的版本 |
 |---|---|
-| OS | Windows |
+| 系统 | Windows |
 | Python | 3.13.11 |
 | PyTorch | 2.11.0+cu130 |
+| TorchAudio | 2.11.0+cu130 |
 | Torch CUDA | 13.0 |
 | GPU | NVIDIA CUDA GPU |
-| IndexTTS | IndexTTS-2.5，固定上游基线 `a371df7` 并应用本仓库补丁 |
 
-`strict_environment=false` 只会关闭版本拦截，不代表其他版本已经兼容。不要为了安装本插件降低 Python、PyTorch 或 CUDA 版本。
+`strict_environment=false` 只关闭版本拦截，不代表其他版本已经兼容。遇到版本错误时，不要直接降级或升级 Torch、Transformers、NumPy。
 
-## 安装
+### 2. 磁盘和网络
 
-### 1. 安装节点
+首次下载包括 IndexTTS-2.5 主模型和运行所需辅助模型，会占用数 GB 磁盘。下载期间需要能访问 Hugging Face 或 ModelScope；中断后已有文件会保留，可以再次运行继续补全。
 
-在 ComfyUI 的 `custom_nodes` 目录执行：
+### 3. 参考音频
+
+建议准备一段：
+
+- 只有一个人说话；
+- 人声清楚、噪声低；
+- 没有背景音乐、混响或其他人的声音；
+- 开头和结尾没有很长的空白。
+
+参考音频只决定声音特征。需要控制表演情绪时，另外连接 Emotion Control。
+
+## 安装插件
+
+### 方法一：Git 克隆
+
+先完全停止 ComfyUI，然后进入 `ComfyUI/custom_nodes`：
 
 ```powershell
 git clone https://github.com/Goldlionren/ComfyUI_JR_IndexTTS25.git
 ```
 
-最终目录应为：
+最终结构应为：
 
 ```text
 ComfyUI/
@@ -57,30 +102,84 @@ ComfyUI/
       ├─ __init__.py
       ├─ nodes.py
       ├─ backend/
-      ├─ index_tts/          # 已兼容的官方运行源码
-      └─ patches/
+      ├─ index_tts/          # 已内置、已兼容的官方运行源码
+      ├─ patches/            # 兼容修改的审计副本
+      ├─ requirements.txt
+      └─ README.md
 ```
 
-如果目标目录已经存在，请先备份或用 Git 正常更新，不要把新版直接覆盖到混合目录中。
+不需要再克隆 `index-tts/index-tts`，也不需要运行 `git am`。
 
-### 2. 官方 IndexTTS-2.5 源码已经内置
+### 安装基础依赖
 
-无需再执行第二次 `git clone`，也无需手动应用补丁。插件自带的 `index_tts` 目录包含完整运行包，并已应用 Python 3.13 / Torch 2.11 / Transformers 兼容层、SoundFile WAV 写入、进度回调、采样参数透传和阿拉伯语归一化修复。
+必须使用“实际启动 ComfyUI 的那个 Python”。不要使用系统里另一个 Python，也不要使用 `pip install -U`。
 
-Loader 的 `source_path_override` 默认留空即可。它只保留给开发者测试其他源码版本；若显式填写，应指向另一个包含 `indextts/infer_v2_5.py` 的源码根目录。不要对内置源码执行 `pip install .`，否则其依赖解析可能改动真实 ComfyUI 环境。
+ComfyUI-aki-v3 示例，在整合包根目录执行：
 
-内置源码固定在上游基线 `a371df7`，最终兼容 revision 为 `30fecfa`。详细来源、修改说明和许可证见 `index_tts/VENDORED_SOURCE.md`、`index_tts/LICENSE` 与 `index_tts/LICENSE_ZH.txt`。
+```powershell
+.\python\python.exe -m pip install -r .\ComfyUI\custom_nodes\ComfyUI_JR_IndexTTS25\requirements.txt
+```
 
-### 3. 准备或下载模型
+官方 Windows Portable 的 Python 路径通常类似：
 
-已有完整模型时，把它放到以下任一位置：
+```powershell
+.\python_embeded\python.exe -m pip install -r .\ComfyUI\custom_nodes\ComfyUI_JR_IndexTTS25\requirements.txt
+```
+
+标准虚拟环境通常类似：
+
+```powershell
+.\venv\Scripts\python.exe -m pip install -r .\custom_nodes\ComfyUI_JR_IndexTTS25\requirements.txt
+```
+
+上面三条命令只选择与你的目录结构匹配的一条。根 `requirements.txt` 不声明 Torch、TorchAudio、TorchVision、Transformers、Tokenizers、NumPy 或 Safetensors，避免主动替换 ComfyUI 核心栈。
+
+可选依赖（下面以 ComfyUI-aki-v3 为例；其他安装只替换 Python 路径）：
+
+```powershell
+# 只有使用内置 QwenEmotion / ModelScope 时才需要
+.\python\python.exe -m pip install -r .\ComfyUI\custom_nodes\ComfyUI_JR_IndexTTS25\requirements-builtin-qwen.txt
+
+# 只有日文 JA 分词/发音时才需要
+.\python\python.exe -m pip install -r .\ComfyUI\custom_nodes\ComfyUI_JR_IndexTTS25\requirements-japanese.txt
+```
+
+中文和英文测试不需要安装 fugashi/MeCab。
+
+安装完成后重新启动 ComfyUI，右键节点菜单搜索 `JR IndexTTS`。
+
+## 第一次运行：自动下载模型
+
+新用户不需要填写任何源码路径。添加 `JR IndexTTS 2.5 Loader`，推荐首次设置：
 
 ```text
-ComfyUI/models/IndexTTS-2.5/
-ComfyUI/models/indextts/IndexTTS-2.5/
+model_path_override: 留空
+download_model: true
+source_path_override: 留空
+device: cuda:0
+precision: fp32
+enable_qwen_emotion: false
+strict_environment: true
 ```
 
-至少需要：
+第一次执行工作流时：
+
+1. Loader 自动使用插件内置的 `index_tts`；
+2. 主模型下载到 `ComfyUI/models/IndexTTS-2.5`；
+3. 模型初始化时补齐 `hf_cache` 中的辅助模型；
+4. 完成后模型保留在磁盘，并缓存在当前 ComfyUI 进程中；
+5. 以后可以关闭 `download_model`，已有完整模型会直接复用。
+
+如果想把模型下载到其他磁盘：
+
+```text
+model_path_override: D:\AI-Models\IndexTTS-2.5
+download_model: true
+```
+
+`model_path_override` 必须是模型根目录，不是 `gpt.pth` 文件本身。
+
+核心模型目录至少包含：
 
 ```text
 IndexTTS-2.5/
@@ -90,246 +189,261 @@ IndexTTS-2.5/
 ├─ codec.pth
 ├─ multilingual_zh_ja_yue_char_del.tiktoken
 ├─ wav2vec2bert_stats.pt
-├─ hf_cache/                  # 官方运行时所需的本地 Hugging Face 内容
-└─ qwen0.6bemo4-merge/        # 仅 builtin_qwen 情绪后端需要
+├─ hf_cache/
+└─ qwen0.6bemo4-merge/     # 只在 builtin_qwen 时加载
 ```
 
-模型在别处时，填写 Loader 的 `model_path_override`，或设置 `INDEXTTS25_MODEL_DIR`。插件不会移动已有大模型，也不会改变已有目录结构。
+下载模型表示使用者自行确认并接受上游模型许可证。插件不会在 Loader 执行时安装 Python package。
 
-没有模型时，在 Loader 中开启 `download_model`，然后运行工作流：
+## 第一个声音克隆工作流
 
-- `model_path_override` 已填写：下载到该目录；
-- `model_path_override` 留空：下载到 `ComfyUI/models/IndexTTS-2.5`；
-- 目标已有完整模型：直接复用，不重复下载；
-- 目标只有部分文件：保留已有文件，由官方下载器继续补全，结束后验证核心文件。
-
-下载源为官方仓库 `IndexTeam/IndexTTS-2.5`，会占用数 GB 磁盘并需要网络。下载开关默认关闭；执行下载即表示使用者自行确认并接受上游模型许可证。这个动作只下载模型文件，不会执行 `pip install`，也不会修改 ComfyUI Python 环境。插件会直接使用内置源码中的官方下载器。
-
-### 4. 依赖边界
-
-`requirements.txt` 只列 IndexTTS 运行时缺失的基础依赖，刻意不列出 Torch、TorchAudio、TorchVision、Transformers、Tokenizers、NumPy 和 Safetensors。安装前先确认 ComfyUI 当前环境确实符合上面的版本要求；不要使用 `pip install -U`。
-
-可选依赖分开管理：
-
-- `requirements-builtin-qwen.txt`：仅使用内置 QwenEmotion 时需要。
-- `requirements-japanese.txt`：仅日文分词/发音需要；缺少 fugashi/MeCab 不影响中文和英文。
-
-本仓库不会在节点执行时自动安装任何包。
-
-## 内置源码与许可证
-
-本插件分发了经过兼容修改的 IndexTTS 运行源码，并保留上游许可证与免责声明。使用、复制和再分发受到 `index_tts/LICENSE` 和 `index_tts/LICENSE_ZH.txt` 约束；中英文冲突时以中文版本为准。
-
-Any modifications made to the original model in this Derivative Work are not endorsed, warranted, or guaranteed by the original right-holder of the original model, and the original right-holder disclaims all liability related to this Derivative Work.
-
-## 最快上手
-
-首次登记一个声音：
+### 工作流连接
 
 ```text
-Load Audio → JR IndexTTS 2.5 Voice Preset ┐
-                                          ├→ JR IndexTTS 2.5 Generate → Preview/Save Audio
-JR IndexTTS 2.5 Loader ───────────────────┘
+Load Audio ─→ JR IndexTTS 2.5 Voice Preset ─┐
+                                             ├→ JR IndexTTS 2.5 Generate ─→ Preview Audio / Save Audio
+JR IndexTTS 2.5 Loader ──────────────────────┘
 ```
 
-以后直接使用已保存声模：
+### 操作步骤
+
+1. 用 ComfyUI 的 `Load Audio` 载入参考人声；
+2. 连接到 `Voice Preset.reference_audio`；
+3. `speaker_name` 填一个容易识别的名字，例如 `紫灵`；
+4. Loader 按上一节设置；
+5. 把 Loader 的 `model` 和 Voice Preset 的 `voice` 连接到 Generate；
+6. Generate 的 `text` 输入短句，例如 `你好，这是我的第一次语音测试。`；
+7. `language=ZH`，其他生成参数先保持默认；
+8. 把 Generate 的 `audio` 连接到 Preview Audio 或 Save Audio；
+9. Queue 工作流。
+
+第一次执行 Voice Preset 会把参考人声登记到声模库。它同时输出可立即生成的 `voice`，所以不需要再接一次 Load Voice Preset。
+
+## 以后直接加载声模
+
+声模保存后，不再需要 Load Audio：
 
 ```text
-JR IndexTTS 2.5 Load Voice Preset ────────┐
-                                          ├→ JR IndexTTS 2.5 Generate → AUDIO
-JR IndexTTS 2.5 Loader ───────────────────┘
+JR IndexTTS 2.5 Load Voice Preset ───────────┐
+                                             ├→ JR IndexTTS 2.5 Generate ─→ AUDIO
+JR IndexTTS 2.5 Loader ──────────────────────┘
 ```
 
-需要情绪时，把 `JR IndexTTS 2.5 Emotion Control` 的输出接到 Generate 的 `emotion`。
+在 `preset` 下拉框选择 `name :: vp_xxx`。如果刚创建的声模还没出现在下拉框，刷新节点定义、刷新浏览器或重启 ComfyUI；也可以把 ID/名称直接填入 `preset_id_or_name_override`。
 
-## 节点完整说明
+默认声模库：
+
+```text
+ComfyUI/models/indextts/voice_presets/
+```
+
+每个声模保存稳定 ID、显示名称、`prompt.wav`、采样率、时长和 SHA-256。移动或备份声模库时，应完整复制整个声模目录。
+
+## 九个节点完整说明
 
 ### 1. JR IndexTTS 2.5 Loader
 
-真实加载并缓存 IndexTTS-2.5，输出 `JR_INDEXTTS25_MODEL`。
+下载、加载和缓存模型，输出 `JR_INDEXTTS25_MODEL`。
 
-| 参数 | 含义 |
-|---|---|
-| `model_path_override` | 模型目录的显式路径。留空时先搜索已有模型；需要下载时默认目标为 `ComfyUI/models/IndexTTS-2.5`。 |
-| `download_model` | 明确开启后，若目标缺少核心模型文件，则从官方 `IndexTeam/IndexTTS-2.5` 下载并补全；默认关闭。 |
-| `source_path_override` | 默认留空，自动使用插件内置的 `index_tts`。仅在开发/调试其他源码时填写；根目录内必须有 `indextts/infer_v2_5.py`。 |
-| `device` | 推理设备，默认 `cuda:0`。 |
-| `precision` | `fp32` 或 `bf16`。BF16 主要作用于 GPT 部分，并要求 GPU 支持。 |
-| `enable_qwen_emotion` | 是否随主模型加载官方内置 QwenEmotion。使用 llama.cpp 情绪后端时应关闭，以节省显存。 |
-| `strict_environment` | 开启时强制检查 Python 3.13.11、Torch 2.11.0+cu130、CUDA 13.0 和 CUDA 可用性。 |
+| 参数 | 初学者设置 | 说明 |
+|---|---|---|
+| `model_path_override` | 留空 | 留空时搜索已有模型；下载时默认 `ComfyUI/models/IndexTTS-2.5`。填写时必须指向模型根目录。 |
+| `download_model` | 首次开启 | 目标不完整时从官方仓库下载并补全；默认关闭。完整模型不会重复下载。 |
+| `source_path_override` | 留空 | 自动使用插件内置 `index_tts`。仅开发者测试其他源码时填写。 |
+| `device` | `cuda:0` | 第一块 NVIDIA GPU。多卡可尝试 `cuda:1`。 |
+| `precision` | 先用 `fp32` | `bf16` 主要作用于 GPT 部分，不代表整个模型都转换为 BF16。 |
+| `enable_qwen_emotion` | `false` | 只有 Emotion Control 使用 `builtin_qwen` 时开启；会增加显存占用。 |
+| `strict_environment` | `true` | 检查目标 Python、Torch、CUDA 和 GPU。关闭不代表其他版本已兼容。 |
 
-相同配置会命中进程内模型缓存。基线固定关闭 CUDA kernel JIT、DeepSpeed、`torch.compile` 和加速实验路径，优先保证 Windows 新栈稳定。
+相同设置会复用进程内模型缓存。Windows 基线主动关闭 CUDA kernel JIT、DeepSpeed、第三方 flash-attn accel 和 `torch.compile`，优先保证稳定。
 
 ### 2. JR IndexTTS 2.5 Voice Preset
 
-输入一段参考人声，保存到声模库，并输出 `JR_INDEXTTS25_VOICE`。
+输入参考音频、保存声模，并立即输出 `JR_INDEXTTS25_VOICE`。
 
-| 参数 | 含义 |
+| 参数 | 说明 |
 |---|---|
-| `reference_audio` | ComfyUI `AUDIO`。建议使用清晰、单人、低噪声、无背景音乐的参考音频。 |
-| `speaker_name` | 声模显示名称，也是多人台词里的角色匹配名。 |
-| `overwrite_existing` | 同名但音频不同时，是否覆盖。默认关闭，防止误覆盖。 |
+| `reference_audio` | ComfyUI `AUDIO`。建议清晰、单人、低噪声、无背景音乐。 |
+| `speaker_name` | 声模名称；也是 Multi-Talk 的角色匹配名。空值会使用 `Narrator`。 |
+| `overwrite_existing` | 同名但音频不同时是否替换。默认关闭以防误覆盖；覆盖后稳定 ID 保持不变。 |
 
-第一次执行会生成：稳定 `id`、`name`、PCM16 `prompt.wav`、SHA-256、采样率、时长和时间戳。相同名称且相同音频会复用原记录。
-
-声模库路径按以下顺序确定：
-
-1. 环境变量 `INDEXTTS25_PRESET_DIR`；
-2. `ComfyUI/models/indextts/voice_presets`；
-3. ComfyUI 外独立运行时的插件本地 `voice_presets`。
+同名且音频内容相同时复用已有记录。同名但音频不同时会报错，除非开启 `overwrite_existing`。
 
 ### 3. JR IndexTTS 2.5 Load Voice Preset
 
-无需重新输入参考音频，直接从声模库输出与 Voice Preset 完全相同的 `JR_INDEXTTS25_VOICE`。
+从持久化声模库加载声音，无需重新输入参考音频。
 
-| 参数 | 含义 |
+| 参数 | 说明 |
 |---|---|
-| `preset` | 已保存声模下拉框，格式为 `name :: id`。新增声模后刷新节点定义或重启/刷新 ComfyUI 可更新列表。 |
-| `preset_id_or_name_override` | 可直接输入稳定 ID 或名称；非空时优先于下拉框，适合刚创建后立即引用。 |
+| `preset` | 下拉框，格式为 `name :: id`。 |
+| `preset_id_or_name_override` | 可填稳定 ID 或名称；非空时优先于下拉框。 |
+
+输出类型与 Voice Preset 完全相同，可以连接 Generate 或 Multi-Talk。
 
 ### 4. JR IndexTTS 2.5 Voice Preset Manager
 
-查看或管理持久化声模，输出格式化 JSON。
+管理声模库，输出格式化 JSON。建议连接任意 Show/Preview Text 节点查看。
 
-| 参数 | 含义 |
-|---|---|
-| `action=list` | 列出所有声模，包含 `id`、`name`、音频路径、采样率、时长、哈希等。 |
-| `action=inspect` | 查看 `preset_id_or_name` 指定的一条记录。 |
-| `action=rename` | 把指定记录改为 `new_name`，稳定 ID 不变。 |
-| `action=delete` | 删除指定声模目录；必须同时设置 `confirm_delete=true`。 |
-| `preset_id_or_name` | `inspect`、`rename`、`delete` 的目标，可填 ID 或名称。 |
-| `new_name` | `rename` 的新名称。 |
-| `confirm_delete` | 删除保护开关。其他 action 不使用。 |
+| `action` | 需要填写 | 作用 |
+|---|---|---|
+| `list` | 无 | 列出所有声模及 `id`、`name`、音频路径、采样率、时长和哈希。 |
+| `inspect` | `preset_id_or_name` | 查看一个声模。 |
+| `rename` | `preset_id_or_name`、`new_name` | 修改名称，稳定 ID 不变。 |
+| `delete` | `preset_id_or_name`、`confirm_delete=true` | 删除记录和对应 `prompt.wav`。 |
 
-删除会移除声模记录及其 `prompt.wav`，请自行确保不再需要该声音。
+删除不可由节点撤销。重要声模请先备份声模目录。
 
 ### 5. JR IndexTTS 2.5 Emotion Control
 
-输出 `JR_INDEXTTS25_EMOTION`。四种 mode 的逻辑不同：
+输出 `JR_INDEXTTS25_EMOTION`，连接 Generate/Multi-Talk 的可选 `emotion` 输入。不连接时使用模型自然情绪。
 
-| mode | 用法 |
-|---|---|
-| `emotion_vector` | 手动设置八维向量。适合可重复、可精确调节的情绪。 |
-| `reference_audio` | 把 `emotion_reference_audio` 的表演情绪迁移到目标声音。 |
-| `auto_from_text` | 分析 Generate 的合成台词本身，自动产生八维向量。 |
-| `emotion_text` | 分析独立的 `emotion_text` 描述，如“压低声音、克制、略带失望”。这里的 `emotion_text` 就是“独立情绪描述文本”。 |
+四种 mode：
 
-八维顺序与官方一致：
+| mode | 情绪来自哪里 | 需要的额外输入 |
+|---|---|---|
+| `emotion_vector` | 手动八维滑块 | 调整八个情绪值 |
+| `reference_audio` | 另一段音频的表演情绪 | 连接 `emotion_reference_audio` |
+| `auto_from_text` | Generate 实际要朗读的正文 | 选择文本情绪后端 |
+| `emotion_text` | 独立表演描述 | 在 `emotion_text` 写描述并选择后端 |
+
+`emotion_text` 是情绪说明，不是朗读正文，例如：
+
+```text
+压低声音，克制，略带失望，但不要哭腔。
+```
+
+官方八维顺序：
 
 ```text
 happy, angry, sad, afraid, disgusted, melancholic, surprised, calm
 开心，生气，悲伤，害怕，厌恶，忧郁，惊讶，平静
 ```
 
-| 参数 | 含义 |
+| 参数 | 说明 |
 |---|---|
-| 八个情绪滑块 | `emotion_vector` 模式下各维的原始强度，范围 0–1。 |
-| `strength` | 情绪条件对最终声音的作用强度 `emo_alpha`，建议先用 0.5–0.7。 |
-| `apply_official_bias` | 对手动向量应用官方偏置/归一化方式。 |
-| `emotion_reference_audio` | 仅 `reference_audio` 模式必填。 |
-| `emotion_text` | 仅 `emotion_text` 模式必填；不是要朗读的正文。 |
-| `random_sampling` | 交给官方情绪路径启用随机采样。需要稳定复现时关闭。 |
+| 八个情绪滑块 | 只在 `emotion_vector` 中使用，范围 0–1。总量超过 0.8 时会按比例归一化。 |
+| `strength` | 情绪对最终声音的作用强度。文本自动情绪建议先从 0.5–0.7 开始。 |
+| `apply_official_bias` | 对手动向量使用官方各维偏置，默认开启。 |
+| `emotion_reference_audio` | 只在 `reference_audio` mode 中需要。 |
+| `emotion_text` | 只在 `emotion_text` mode 中需要。 |
+| `random_sampling` | 官方情绪条件的随机采样；它与 Generate 的 `do_sample` 不是同一个开关。 |
 | `text_emotion_backend` | `llama.cpp_openai_api` 或 `builtin_qwen`。 |
-| `openai_api_url` | llama.cpp/OpenAI-compatible 服务地址，默认 `http://127.0.0.1:10000`。可填服务根、`/v1` 或完整 chat completions URL。 |
-| `openai_api_key` | 本地 llama.cpp 通常留空；远程兼容服务按需填写。 |
-| `openai_model` | 留空时自动读取 `/v1/models` 返回的第一个模型 ID。 |
-| `llm_timeout_seconds` | LLM 请求超时。 |
+| `openai_api_url` | OpenAI-compatible 服务地址，可填根地址、`/v1` 或完整 chat completions URL。 |
+| `openai_api_key` | 本地 llama.cpp 通常留空。 |
+| `openai_model` | 留空时先请求 `/v1/models` 并使用返回的第一个模型 ID。 |
+| `llm_timeout_seconds` | LLM 请求超时，默认 120 秒。 |
 
-推荐的本地 llama.cpp 配置：
+#### 推荐：外部 llama.cpp 自动情绪
+
+先启动支持 OpenAI API 的 llama.cpp server，然后设置：
 
 ```text
-mode: auto_from_text 或 emotion_text
-text_emotion_backend: llama.cpp_openai_api
-openai_api_url: http://127.0.0.1:10000
-openai_api_key: 留空
-openai_model: 留空
-strength: 0.5–0.7
+Loader.enable_qwen_emotion: false
+Emotion Control.mode: auto_from_text 或 emotion_text
+Emotion Control.text_emotion_backend: llama.cpp_openai_api
+Emotion Control.openai_api_url: http://127.0.0.1:10000
+Emotion Control.openai_api_key: 留空
+Emotion Control.openai_model: 留空
+Emotion Control.strength: 0.5–0.7
 ```
 
-llama.cpp 返回值会被限制并转换成官方八维向量，再送入 IndexTTS 原生推理。此路径不需要 Loader 开启 Qwen。`builtin_qwen` 才要求 `enable_qwen_emotion=true`、完整的 Qwen 模型目录和可选依赖。
+外部 LLM 返回会被限制并转换为官方八维向量，再送入原生推理。这条路径不占用内置 Qwen 的额外显存。
+
+#### 可选：内置 QwenEmotion
+
+设置：
+
+```text
+Loader.enable_qwen_emotion: true
+Emotion Control.text_emotion_backend: builtin_qwen
+```
+
+这条路径要求模型目录中存在完整 `qwen0.6bemo4-merge`，并可能需要 `requirements-builtin-qwen.txt`。它会增加模型加载时间和 GPU 显存占用。
 
 ### 6. JR IndexTTS 2.5 Pronunciation Enhance (LLM)
 
-让 llama.cpp/OpenAI-compatible LLM 只给歧义词增加官方发音标注，输出增强后的字符串，再连接到 Generate 的 `text`。
+调用 llama.cpp/OpenAI-compatible LLM，只给歧义词添加官方发音标注，输出 `enhanced_text`。把它连接到 Generate 的 `text`。
 
-| 参数 | 含义 |
+| 参数 | 说明 |
 |---|---|
-| `text` | 原始待朗读文本。 |
+| `text` | 原始正文。 |
 | `language` | `ZH`、`EN` 或 `JA`。 |
-| `openai_api_url/key/model/timeout` | 与 Emotion Control 相同。model 留空时自动发现。 |
-| `instruction` | 给 LLM 的补充要求。默认只标真正需要指定读音的词，不改写原文。 |
+| `openai_api_url/key/model/timeout` | 与 Emotion Control 相同；model 留空时自动发现。 |
+| `instruction` | 给 LLM 的额外要求。默认只标必要词，不改写原文。 |
 
-官方标注语法：
+官方标注示例：
 
 ```text
-中文：银<行|HANG2>今天休息。
+中文：银<行|HANG2>今天休息，他沿路<行|XING2>走。
 英文：A <minute|M IH1 . N AH0 T> detail.
 日文：彼は<上手|じょうず>です。
 ```
 
-中文自动增强会严格要求一个汉字对应一个带声调数字的拼音音节。节点会校验：去掉 `<原文|读音>` 标注后必须与原文完全一致；如果 LLM 擅自改写、删字或加字，节点会报错而不是静默采用。
-
-也可以完全不经过该节点，直接在 Generate 的正文中手写上述官方标注。
+节点会校验：去掉标注后的正文必须与原文完全一致。LLM 如果改写、删字或加字，节点会报错，不会静默使用错误结果。也可以不使用该节点，直接在 Generate 正文中手写官方标注。
 
 ### 7. JR IndexTTS 2.5 Generate
 
-单声音生成，输入 Loader 的 `model`、任一 Voice 节点的 `voice`，输出标准 ComfyUI `AUDIO`。
+单声音生成。必须连接 Loader 的 `model` 和任一 Voice 节点的 `voice`，输出标准 ComfyUI `AUDIO`（22,050 Hz 单声道）。
 
-| 参数 | 含义 |
+| 参数 | 说明 |
 |---|---|
-| `text` | 要合成的正文，可包含官方发音标注。 |
-| `language` | 官方当前菜单：`ZH`、`EN`、`JA`、`AR`、`ES`。 |
-| `duration_factor` | 时长倍率，0.5–2.0。增大通常更慢、更长。 |
-| `text_normalization` | 使用官方文本归一化。西班牙语/阿拉伯语若缺少 NeMo 会安全退回原文；中文/英文使用各自路径。 |
-| `interval_silence_ms` | 长文本分段之间插入的静音。 |
-| `seed` | Torch/CUDA 随机种子。相同环境和参数下用于复现。 |
-| `unload_model_after` | 生成结束后从插件模型缓存卸载该模型并清理 CUDA 缓存。批量生成时建议关闭。 |
-| `emotion` | 可选，连接 Emotion Control。未连接时使用自然/默认情绪。 |
+| `text` | 要朗读的正文，可接 Pronunciation Enhance。不能为空。 |
+| `language` | `ZH`、`EN`、`JA`、`AR`、`ES`。应与正文主要语言匹配。 |
+| `duration_factor` | 0.5–2.0；增大通常让结果更长、更慢。先用 1.0。 |
+| `text_normalization` | 官方文本归一化，通常开启。 |
+| `interval_silence_ms` | 长文本内部切段之间的静音，默认 200 ms。 |
+| `seed` | Torch/CUDA 种子。相同环境与参数有助于复现，但 GPU 不保证跨机器逐样本完全一致。 |
+| `unload_model_after` | 生成后卸载本插件模型。连续生成时保持关闭；开启后下次使用需让 Loader 重新执行。 |
+| `emotion` | 可选，连接 Emotion Control；未连接时使用自然情绪。 |
 
-高级参数见“采样与长文本参数”一节。
+高级生成参数见“采样与长文本参数”。
 
 ### 8. JR IndexTTS 2.5 Multi-Talk Generate
 
-按标签选择多个声音，逐段生成后拼成一个 `AUDIO`。
+按角色标签选择多个声音，逐段生成并拼成一个 `AUDIO`。
 
-| 参数 | 含义 |
+| 参数 | 说明 |
 |---|---|
-| `dialogue` | 多人台词文本，语法见下一节。 |
-| `voice_1` … `voice_10` | 最多连接 10 个 Voice Preset/Load Voice Preset。至少连接一路。 |
-| `emotion` | 可选的共享情绪，也为逐句 `auto`/`emo_text` 提供 LLM 后端配置。 |
-| `gap_ms` | 不同台词段之间插入的静音。 |
-| 其他参数 | 与 Generate 相同。每段 seed 为 `seed + 段索引`。 |
+| `model` | 连接 Loader。 |
+| `dialogue` | 多人台词，语法见下一节。 |
+| `language` | 当前整段共用一个语言选项。 |
+| `voice_1` … `voice_10` | 最多 10 个 Voice；至少连接一路。 |
+| `emotion` | 可选共享情绪；也为逐句 `auto` / `emo_text` 提供 LLM URL、key、model 和 timeout。 |
+| `gap_ms` | 不同台词段之间的静音。 |
+| `duration_factor`、`text_normalization` | 与 Generate 相同。 |
+| `seed` | 第一段使用 seed，后续段依次使用 `seed + 段索引`。 |
+| `unload_model_after` | 整段完成后卸载模型；连续生成时保持关闭。 |
 
-角色名按 Voice 的 `speaker_name`/声模名进行不区分大小写匹配。未知角色会回退到 `voice_1`，所以正式工作流应检查拼写。
+角色名按 Voice 的声模名称进行不区分大小写匹配。未知角色会回退到第一个已连接 Voice，因此正式生成前应检查角色拼写。
 
 ### 9. JR IndexTTS 2.5 Runtime Diagnostics
 
-输出 JSON 运行报告。
+输出 JSON。建议连接 Show/Preview Text 节点查看。
 
-| action | 含义 |
+| action | 说明 |
 |---|---|
-| `report` | 显示 Python、Torch、Torch CUDA、CUDA 可用性、GPU 和插件模型缓存。 |
-| `unload_model` | 卸载输入的 `model`；必须连接 model。 |
+| `report` | 查看 Python、Torch、Torch CUDA、CUDA、GPU 和本插件模型缓存。 |
+| `unload_model` | 卸载连接的单个模型；必须连接 `model`。 |
 | `unload_all` | 卸载本插件缓存的全部 IndexTTS 模型并清理 CUDA 缓存。 |
 
-它不会卸载或修改其他 custom node 的模型，也不会修改任何 Python package。
+它不会卸载其他 custom node 的模型，也不会安装、升级或删除 Python package。
 
 ## 多人台词语法
 
 ### 基本格式
 
-冒号支持半角 `:` 和全角 `：`：
+半角和全角冒号都支持：
 
 ```text
 [紫灵]: 你好，今天过得怎么样？
 [旁白]：夜色慢慢沉了下来。
 ```
 
-角色名必须对应某个已连接 Voice 的名称。每个新 `[角色]` 标签开始一个新片段，正文可以跨行，直到下一个角色标签。
+角色名应与已连接 Voice 的 `speaker_name`/声模名一致。每个新 `[角色]` 开始一个片段；正文可以跨行，直到下一个角色标签。
 
-### 逐句情绪格式
+### 逐句情绪
 
-在角色名后用 `|` 增加选项：
+在角色名后用 `|` 添加选项：
 
 ```text
 [紫灵|开心=0.55|平静=0.20|强度=0.8]: 你好，今天过得怎么样？
@@ -339,7 +453,7 @@ llama.cpp 返回值会被限制并转换成官方八维向量，再送入 IndexT
 [旁白|natural]: 这句不使用共享情绪。
 ```
 
-情绪名称可写英文或中文别名：
+情绪别名：
 
 | 官方维度 | 中文别名 |
 |---|---|
@@ -354,45 +468,55 @@ llama.cpp 返回值会被限制并转换成官方八维向量，再送入 IndexT
 
 可用选项：
 
-- `开心=0.6` / `happy=0.6`：指定向量值，范围 0–1；省略 `=值` 时默认 0.8。
+- `开心=0.6` / `happy=0.6`：指定 0–1 的向量值；省略数值时默认 0.8。
 - `strength=0.6` / `alpha=0.6` / `强度=0.6`：该句情绪作用强度。
 - `auto` / `自动` / `自动情绪`：分析该句正文。
-- `emo_text=描述` / `emotion_text=描述` / `情绪文本=描述`：使用独立表演描述。
-- `random` / `随机`：开启；也可写 `random=false`。
-- `bias` / `official_bias` / `官方偏置`：官方偏置开关，可写 `bias=false`。
-- `natural` / `none` / `自然` / `无情绪`：该句不使用情绪；必须单独出现。
+- `emo_text=描述` / `emotion_text=描述` / `情绪文本=描述`：分析独立表演描述。
+- `random` / `随机`：开启情绪随机采样，也可写 `random=false`。
+- `bias` / `official_bias` / `官方偏置`：官方偏置，可写 `bias=false`。
+- `natural` / `none` / `自然` / `无情绪`：本句不使用情绪，必须单独出现。
 
 布尔值接受 `true/false`、`yes/no`、`on/off`、`1/0`、`是/否`、`开/关`。手动向量不能与 `auto` 或 `emo_text` 混用。
 
-逐句标签优先于节点共享 `emotion`。逐句 `auto`/`emo_text` 会继承共享 Emotion Control 的 llama.cpp URL、key、model 和 timeout；如果没有连接共享 Emotion Control，则使用默认 `http://127.0.0.1:10000` 的 llama.cpp 后端。
+逐句标签优先于共享 `emotion`。逐句 `auto`/`emo_text` 会继承共享 Emotion Control 的 LLM 配置；没有连接共享 Emotion Control 时，默认调用 `http://127.0.0.1:10000`。
 
 ## 采样与长文本参数
 
-Generate 和 Multi-Talk Generate 都提供以下参数：
+Generate 和 Multi-Talk 都提供：
 
-| 参数 | 作用 |
-|---|---|
-| `do_sample` | 开启时按概率采样，声音表现通常更有变化；关闭时走确定性/搜索式生成，`temperature`、`top_p`、`top_k` 的采样作用会减弱或不生效。 |
-| `temperature` | 采样随机度。越高越发散，越低越保守；通常先用 0.8。 |
-| `top_p` | nucleus sampling，只从累计概率范围内采样。1.0 近似不裁剪。 |
-| `top_k` | 只保留概率最高的 K 个候选；`0` 表示禁用 top-k。 |
-| `num_beams` | beam search 数。更高可能更稳定但更慢、更占显存；默认 3。 |
-| `repetition_penalty` | 重复惩罚。过高可能损伤自然度；当前官方默认路径为 10.0。 |
-| `length_penalty` | 搜索时的长度偏好，正值更偏长，负值更偏短。 |
-| `max_mel_tokens` | 单次生成允许的最大声学 token 数，限制最长音频；范围 50–1815。 |
-| `max_text_tokens_per_segment` | 长文本切段的最大文本 token 数；越小分段越多，越大单段负担越高。 |
+| 参数 | 默认 | 作用 |
+|---|---:|---|
+| `do_sample` | true | 开启概率采样，表现通常更有变化；关闭时更偏确定性/搜索式生成。 |
+| `temperature` | 0.8 | 采样随机度。越高越发散，越低越保守。 |
+| `top_p` | 0.8 | nucleus sampling 的累计概率范围。1.0 近似不裁剪。 |
+| `top_k` | 30 | 只保留最高概率的 K 个候选；0 表示关闭 top-k。 |
+| `num_beams` | 3 | beam 数；提高可能更稳定，但更慢、更占显存。 |
+| `repetition_penalty` | 10.0 | 重复惩罚。过高可能影响自然度。 |
+| `length_penalty` | 0.0 | 搜索时的长度偏好；正值偏长，负值偏短。 |
+| `max_mel_tokens` | 1500 | 单段最大声学 token，范围 50–1815。 |
+| `max_text_tokens_per_segment` | 120 | 长文本每段最大文本 token，范围 20–600。 |
 
-本仓库第二个源码补丁修复了上游把 `do_sample` 固定成 `True` 的问题，因此 UI 中关闭它会真实传入 GPT 生成逻辑。
+初学者建议全部保持默认。只想提高可复现性时，可以先尝试：
+
+```text
+do_sample: false
+num_beams: 3
+seed: 固定值
+```
+
+`do_sample=false` 时，temperature、top-p、top-k 的采样作用会减弱或不生效。本项目内置源码已修复上游将 `do_sample` 固定为 true 的问题，所以 UI 开关会真实传入 GPT。
+
+长文本出现断句不自然时，优先调整标点和 `max_text_tokens_per_segment`；不要一开始同时修改所有采样参数。
 
 ## 生成进度
 
-两个生成节点都把 IndexTTS 原生阶段映射到 ComfyUI ProgressBar，包括文本处理、情绪分析、逐段生成和完成。Multi-Talk 会按片段数量汇总总进度。
+Generate 和 Multi-Talk 会把文本处理、情绪分析、逐段生成和完成阶段映射到 ComfyUI ProgressBar。Multi-Talk 按片段数量汇总进度。
 
-进度代表当前处理阶段，不是严格的逐 token 百分比；某些模型步骤本身没有更细粒度回调，所以进度可能在一个阶段停留后跳到下一阶段。
+这是阶段级进度，不是严格逐 token 百分比。某些模型阶段没有更细回调，因此进度可能停留一段时间后跳到下一阶段。
 
-## 路径搜索顺序
+## 路径与文件位置
 
-模型目录：
+### 模型搜索顺序
 
 1. Loader `model_path_override`
 2. `INDEXTTS25_MODEL_DIR`
@@ -400,30 +524,82 @@ Generate 和 Multi-Talk Generate 都提供以下参数：
 4. `ComfyUI/models/indextts/IndexTTS-2.5`
 5. 开发工作区相邻的 `models/IndexTTS-2.5`
 
-当 `download_model=true` 时，填写了 `model_path_override` 就以该路径为下载目标；留空则固定下载到 `ComfyUI/models/IndexTTS-2.5`。环境变量和其他搜索位置只用于复用已经完整的模型，不会改变留空时的默认下载目标。
+当 `download_model=true`：
 
-源码目录：
+- `model_path_override` 非空：以该路径为下载目标；
+- `model_path_override` 留空：固定下载到 `ComfyUI/models/IndexTTS-2.5`；
+- 已找到完整模型：直接复用。
+
+### 源码搜索顺序
 
 1. Loader `source_path_override`
 2. `INDEXTTS25_SOURCE`
-3. `ComfyUI_JR_IndexTTS25/index_tts`（默认内置）
+3. `ComfyUI_JR_IndexTTS25/index_tts`（普通用户默认）
 4. 开发工作区相邻的 `source/index-tts`
 
-缓存目录可用 `INDEXTTS25_CACHE_DIR` 指定。默认放在 ComfyUI 临时目录下，Numba 缓存不会写入真实 ComfyUI Python 的 `site-packages`。
+正常安装永远可以把 `source_path_override` 留空。若报源码缺失，通常说明 Git 下载不完整；确认存在：
+
+```text
+ComfyUI_JR_IndexTTS25/index_tts/indextts/infer_v2_5.py
+```
+
+### 声模库
+
+1. `INDEXTTS25_PRESET_DIR`
+2. `ComfyUI/models/indextts/voice_presets`
+3. 非 ComfyUI 独立运行时的插件本地 `voice_presets`
+
+### 临时缓存
+
+`INDEXTTS25_CACHE_DIR` 可以指定缓存目录。默认使用 ComfyUI temp 下的 `jr_indextts25`，Numba 缓存不会写入 ComfyUI Python 的 `site-packages`。
+
+## 更新插件
+
+完全停止 ComfyUI，在插件目录执行：
+
+```powershell
+git pull
+```
+
+然后重新启动 ComfyUI。不要把备份目录放在 `custom_nodes` 内，否则 ComfyUI 可能同时加载新旧两份节点。
+
+更新插件不会自动删除模型或声模；仍建议在重要更新前备份：
+
+```text
+ComfyUI/models/IndexTTS-2.5
+ComfyUI/models/indextts/voice_presets
+```
 
 ## 常见问题
 
-### Loader 显示找不到模型或源码
+### 找不到 JR IndexTTS 节点
 
-检查填写的是目录而不是某个 `.pth` 文件。`model_path_override` 应指向同时包含 `config.yaml`、`gpt.pth`、`s2mel.pth` 和其他必需文件的 `IndexTTS-2.5` 根目录。正常安装不需要填写 `source_path_override`；如果显式覆盖，它应指向包含 `indextts` 文件夹的源码根目录。
+确认插件目录不是多嵌套一层：
 
-如果尚未下载模型，可开启 Loader 的 `download_model` 后重新运行。下载失败不会清空目标目录，已经完成的文件会保留，修复网络或磁盘问题后可以再次运行。若报缺少源码，请确认 Git 克隆完整且插件内存在 `index_tts/indextts/infer_v2_5.py`，不要通过节点安装 Python 包。
+```text
+正确：custom_nodes/ComfyUI_JR_IndexTTS25/__init__.py
+错误：custom_nodes/ComfyUI_JR_IndexTTS25/ComfyUI_JR_IndexTTS25/__init__.py
+```
 
-### 新参数或新节点没有出现
+查看 ComfyUI 启动窗口中的 custom node import 错误。缺包时必须使用启动 ComfyUI 的 Python 安装 `requirements.txt`。
 
-完全停止并重启 ComfyUI。检查 `custom_nodes` 下是否同时残留旧目录、备份目录或重名副本；ComfyUI 可能把备份也当作节点加载。备份应放到 `custom_nodes` 外。
+### Loader 报环境版本不兼容
 
-### llama.cpp 情绪分析连接失败
+先用 Runtime Diagnostics 查看 Python、Torch 和 Torch CUDA。目标是 Python 3.13.11、Torch 2.11.0+cu130、CUDA 13.0。不要把 `strict_environment=false` 当作通用修复。
+
+### Loader 报找不到源码
+
+普通用户不填写 `source_path_override`。确认 Git 克隆完整，并存在 `index_tts/indextts/infer_v2_5.py`。不要把路径填成 `indextts` 子目录或某个 `.py` 文件。
+
+### Loader 报找不到模型
+
+第一次使用请开启 `download_model`。如果手动填写路径，它应指向同时包含 `config.yaml`、`gpt.pth`、`s2mel.pth` 等文件的模型根目录。
+
+### 模型下载中断
+
+已有文件会保留。检查磁盘空间和网络后，再次开启 `download_model` 并运行。不要手动删除已经完成的大文件，除非确认文件损坏。
+
+### llama.cpp 情绪或发音增强连接失败
 
 确认服务已启动，并能访问：
 
@@ -432,45 +608,101 @@ http://127.0.0.1:10000/v1/models
 http://127.0.0.1:10000/v1/chat/completions
 ```
 
-model 留空时节点会先请求 `/v1/models`。如果服务要求鉴权，填写 key；如果返回多个模型，可显式填写模型 ID。
+API URL 可填写 `http://127.0.0.1:10000`。model 留空时节点先请求 `/v1/models`；服务需要鉴权时才填写 key。
+
+### builtin_qwen 报错
+
+同时确认：
+
+- Loader `enable_qwen_emotion=true`；
+- Emotion Control `text_emotion_backend=builtin_qwen`；
+- 模型目录存在完整 `qwen0.6bemo4-merge`；
+- 已评估并安装 `requirements-builtin-qwen.txt`；
+- GPU 显存足够。
+
+使用外部 llama.cpp 时，Loader 的 Qwen 开关应关闭。
+
+### 新声模没有出现在下拉框
+
+刷新节点定义、浏览器页面或重启 ComfyUI。也可以在 Load Voice Preset 的 `preset_id_or_name_override` 直接填写声模名称或稳定 ID。
+
+### 同名声模保存失败
+
+同名、同音频会复用；同名、不同音频默认拒绝覆盖。确认确实要替换后才开启 `overwrite_existing`。
+
+### Multi-Talk 角色用了错误声音
+
+检查 `[角色]` 是否与 Voice 的声模名称一致。未知角色会回退到第一个连接的 Voice。建议每个角色使用唯一名称。
 
 ### 提示缺少 fugashi / MeCab
 
-这是日文可选依赖限制。不要为了中文/英文测试安装它；只有确实使用日文时，再评估 `requirements-japanese.txt`。
+这是日文可选依赖。中文和英文不需要安装；确实使用 JA 时再安装 `requirements-japanese.txt`。
 
 ### 西班牙语或阿拉伯语缺少 NeMo
 
-Windows 环境中 NeMo/Pynini 并非默认依赖。插件的兼容源码会在 NeMo 不可用时保留原文继续合成；这表示高级文本归一化降级，不等于核心 TTS 不可用。
+Windows 环境中 NeMo/Pynini 不是默认依赖。内置兼容源码会在 NeMo 不可用时保留原文继续合成，表示高级文本归一化降级，不影响核心 TTS 调用。
 
-### TorchAudio 保存 WAV 报 TorchCodec/FFmpeg DLL 错误
+### TorchAudio 保存 WAV 报 TorchCodec/FFmpeg DLL
 
-本项目内置兼容源码已把官方推理的 WAV 写入改为 SoundFile PCM16。请确认插件的 `index_tts` 目录完整，不要通过升级/降级 TorchAudio 来绕过。
+插件内置源码已经使用 SoundFile PCM16 写入，不应通过升级/降级 TorchAudio 解决。确认没有用 `source_path_override` 指向未打补丁的官方源码。
+
+### CUDA 显存不足
+
+依次尝试：
+
+1. 关闭 Loader `enable_qwen_emotion`，改用外部 llama.cpp；
+2. 缩短文本或降低 `max_text_tokens_per_segment`；
+3. 关闭其他占用显存的工作流/模型；
+4. 生成完成后使用 Runtime Diagnostics `unload_model` / `unload_all`；
+5. GPU 支持时再测试 `bf16`。
+
+### 卸载后提示 model handle has been unloaded
+
+`unload_model_after` 或 Diagnostics 卸载会让当前 handle 失效。让 Loader 重新执行后再生成；连续调试时保持 `unload_model_after=false`。
 
 ## 已知边界
 
-- 首版严格验证目标是 Windows + Python 3.13.11 + Torch 2.11.0+cu130；其他平台/版本尚未声明兼容。
-- `builtin_qwen` 会增加模型加载时间和 GPU 显存占用；默认推荐外部 llama.cpp。
-- 日文需要额外分词依赖；中文、英文不依赖它。
-- 西班牙语/阿拉伯语在缺少 NeMo 时会跳过高级文本归一化。
-- 进度是阶段级进度，不是逐 token 进度。
-- 模型权重和声音数据不包含在本仓库中；兼容后的官方运行源码已经内置。
+- 已声明兼容目标是 Windows + Python 3.13.11 + Torch 2.11.0+cu130；其他组合尚未承诺。
+- `builtin_qwen` 增加模型加载时间和显存占用，默认推荐外部 llama.cpp。
+- 日文需要可选分词依赖；中文和英文不依赖它。
+- 西班牙语和阿拉伯语缺少 NeMo 时跳过高级文本归一化。
+- Multi-Talk 当前整段共用一个 `language`。
+- 进度是阶段级，不是逐 token。
+- 模型权重和声模数据不包含在 GitHub 仓库中。
 
-## 致谢与上游
+## 许可证与上游
+
+插件内置了经过兼容修改的 IndexTTS 运行源码，并保留：
+
+- `index_tts/LICENSE`
+- `index_tts/LICENSE_ZH.txt`
+- `index_tts/DISCLAIMER`
+- `index_tts/VENDORED_SOURCE.md`
+
+使用、复制和再分发受上游许可证约束；中英文冲突时以中文版本为准。
+
+Any modifications made to the original model in this Derivative Work are not endorsed, warranted, or guaranteed by the original right-holder of the original model, and the original right-holder disclaims all liability related to this Derivative Work.
+
+上游：
 
 - IndexTTS / IndexTTS-2.5：<https://github.com/index-tts/index-tts>
 - ComfyUI：<https://github.com/comfyanonymous/ComfyUI>
 
-本项目是独立的 ComfyUI 集成与兼容层。请同时遵守上游源码、模型权重和参考音频各自的许可及使用条款。
+内置源码固定信息：
 
-## v0.2.0
+- 上游基线：`a371df7d0746a0ae7fdf075798b6b04e34a0132e`
+- 最终兼容 revision：`30fecfa188455a560aeea6f6dc60bc2f7c19bb14`
 
-- Loader 增加明确选择的官方模型下载开关和默认 ComfyUI 模型目录。
-- 内置固定 revision、已验证并已应用兼容修改的 IndexTTS 运行源码。
-- 新用户无需第二次克隆源码、无需手动应用补丁，`source_path_override` 默认留空。
+## 更新记录
 
-## v0.1.0
+### v0.2.0
 
-- 发布 9 个 IndexTTS-2.5 ComfyUI 节点。
-- 完成 Python 3.13.11 / Torch 2.11.0+cu130 / CUDA 13 兼容层。
-- 支持持久化声模库、多人逐句情绪、llama.cpp 情绪分析和发音增强。
-- 支持高级生成参数、长文本参数、进度条和模型缓存管理。
+- Loader 增加官方模型下载开关和默认 ComfyUI 模型目录。
+- 内置固定 revision、已验证且已应用兼容修改的 IndexTTS 运行源码。
+- 新用户无需第二次克隆源码或手动应用补丁，`source_path_override` 默认留空。
+- 提供 9 个节点、持久化声模、多人逐句情绪、llama.cpp 情绪/发音增强、高级采样参数、长文本和进度条。
+
+### v0.1.0
+
+- 完成 Python 3.13.11 / Torch 2.11.0+cu130 / CUDA 13 兼容基线。
+- 发布第一版 IndexTTS-2.5 ComfyUI 节点。

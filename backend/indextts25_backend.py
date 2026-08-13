@@ -628,7 +628,9 @@ def _dialogue_emotion(options: list[str]) -> EmotionControl | None:
         elif key in {"natural", "none", "自然", "无情绪"}:
             if len(options) != 1:
                 raise ValueError(f"Dialogue option {option!r} cannot be combined with other emotion options")
-            return None
+            # Keep an explicit empty control so Multi-Talk does not fall back to
+            # a shared Emotion Control for this segment.
+            return EmotionControl(vector=None)
         else:
             raise ValueError(f"Unknown dialogue emotion option: {option!r}")
 
