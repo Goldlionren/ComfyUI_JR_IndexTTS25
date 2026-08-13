@@ -13,6 +13,7 @@ from .indextts25_backend import (
     model_download_dir,
     parse_dialogue,
     parse_dialogue_segments,
+    runtime_compatibility_errors,
     runtime_diagnostics,
 )
 from .voice_presets import (
@@ -57,6 +58,7 @@ __all__ = [
     "model_download_dir",
     "parse_dialogue",
     "parse_dialogue_segments",
+    "runtime_compatibility_errors",
     "runtime_diagnostics",
     "VoicePresetRecord",
     "delete_voice_preset",

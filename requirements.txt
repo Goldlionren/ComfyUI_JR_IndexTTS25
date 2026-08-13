@@ -1,7 +1,7 @@
 # This plugin intentionally does not install or replace torch, torchvision,
 # torchaudio, transformers, tokenizers, numpy, or safetensors. It uses the
 # existing ComfyUI runtime stack for those packages.
-audioop-lts>=0.2.2
+audioop-lts>=0.2.2; python_version >= "3.13"
 cn2an>=0.5.23
 descript-audiotools @ git+https://github.com/descriptinc/audiotools.git@ffe03e96b4d2dfb3ddecad289a6a95a7e96cc8c6
 einops>=0.8.1
@@ -17,4 +17,5 @@ openai-whisper>=20250625
 sentencepiece>=0.2.1
 soundfile>=0.13.1
 textstat>=0.7.12
-wetext>=0.1.2; sys_platform == "win32"
+wetext>=0.1.2; sys_platform != "linux"
+WeTextProcessing>=1.2.0; sys_platform == "linux"

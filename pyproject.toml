@@ -1,13 +1,15 @@
 [project]
 name = "comfyui-jr-indextts25"
-version = "0.3.1"
-description = "Native IndexTTS-2.5 nodes for ComfyUI on Python 3.13 and Torch 2.11 cu130"
+version = "0.4.0rc1"
+description = "Native IndexTTS-2.5 nodes for ComfyUI on Python 3.12/3.13 and Torch 2.11 cu130"
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.12,<3.14"
 keywords = ["comfyui", "indextts", "tts", "voice-cloning", "audio"]
 classifiers = [
+  "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
   "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 

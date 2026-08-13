@@ -3,8 +3,10 @@ from __future__ import annotations
 import gc
 import hashlib
 import importlib
+import importlib.metadata
 import json
 import os
+import platform
 import re
 import sys
 import threading
@@ -35,6 +37,12 @@ MODEL_REPO_ID = "IndexTeam/IndexTTS-2.5"
 MODEL_CACHE: dict[tuple[str, str, bool, bool, str], "IndexTTS25Handle"] = {}
 MODEL_CACHE_LOCK = threading.RLock()
 MODEL_DOWNLOAD_LOCK = threading.RLock()
+SUPPORTED_PYTHON_MINORS = ((3, 12), (3, 13))
+SUPPORTED_OPERATING_SYSTEMS = ("Windows", "Linux")
+SUPPORTED_MACHINE_TYPES = ("AMD64", "x86_64")
+REQUIRED_TORCH_VERSION = "2.11.0+cu130"
+REQUIRED_TORCHAUDIO_VERSION = "2.11.0+cu130"
+REQUIRED_TORCH_CUDA = "13.0"
 EMOTION_NAMES = (
     "happy",
     "angry",
@@ -281,17 +289,53 @@ def ensure_model_available(
         return target_dir
 
 
+def runtime_compatibility_errors(
+    *,
+    python_version: tuple[int, int, int],
+    operating_system: str,
+    machine: str,
+    torch_version: str,
+    torchaudio_version: str | None,
+    torch_cuda: str | None,
+    cuda_available: bool,
+) -> list[str]:
+    errors: list[str] = []
+    if python_version[:2] not in SUPPORTED_PYTHON_MINORS:
+        supported = ", ".join(f"{major}.{minor}.x" for major, minor in SUPPORTED_PYTHON_MINORS)
+        errors.append(
+            f"Python {supported} required, found {'.'.join(str(part) for part in python_version)}"
+        )
+    if operating_system not in SUPPORTED_OPERATING_SYSTEMS:
+        errors.append(
+            f"Windows or Linux required, found {operating_system or 'unknown operating system'}"
+        )
+    if machine not in SUPPORTED_MACHINE_TYPES:
+        errors.append(f"x86-64 required, found {machine or 'unknown architecture'}")
+    if torch_version != REQUIRED_TORCH_VERSION:
+        errors.append(f"torch {REQUIRED_TORCH_VERSION} required, found {torch_version}")
+    if torchaudio_version != REQUIRED_TORCHAUDIO_VERSION:
+        errors.append(
+            f"torchaudio {REQUIRED_TORCHAUDIO_VERSION} required, "
+            f"found {torchaudio_version or 'not installed'}"
+        )
+    if torch_cuda != REQUIRED_TORCH_CUDA:
+        errors.append(f"Torch CUDA {REQUIRED_TORCH_CUDA} required, found {torch_cuda}")
+    if not cuda_available:
+        errors.append("CUDA is not available")
+    return errors
+
+
 def assert_runtime_compatible(strict: bool = True) -> dict[str, Any]:
     info = runtime_diagnostics()
-    errors: list[str] = []
-    if sys.version_info[:3] != (3, 13, 11):
-        errors.append(f"Python 3.13.11 required, found {sys.version.split()[0]}")
-    if not torch.__version__.startswith("2.11.0+cu130"):
-        errors.append(f"torch 2.11.0+cu130 required, found {torch.__version__}")
-    if torch.version.cuda != "13.0":
-        errors.append(f"Torch CUDA 13.0 required, found {torch.version.cuda}")
-    if not torch.cuda.is_available():
-        errors.append("CUDA is not available")
+    errors = runtime_compatibility_errors(
+        python_version=sys.version_info[:3],
+        operating_system=platform.system(),
+        machine=platform.machine(),
+        torch_version=torch.__version__,
+        torchaudio_version=info["torchaudio"],
+        torch_cuda=torch.version.cuda,
+        cuda_available=torch.cuda.is_available(),
+    )
     if strict and errors:
         raise RuntimeError("Incompatible ComfyUI runtime:\n- " + "\n- ".join(errors))
     info["compatibility_errors"] = errors
@@ -702,9 +746,16 @@ def cache_diagnostics() -> list[dict[str, Any]]:
 
 def runtime_diagnostics() -> dict[str, Any]:
     cuda_available = torch.cuda.is_available()
+    try:
+        torchaudio_version = importlib.metadata.version("torchaudio")
+    except importlib.metadata.PackageNotFoundError:
+        torchaudio_version = None
     return {
         "python": sys.version.split()[0],
+        "operating_system": platform.system(),
+        "machine": platform.machine(),
         "torch": torch.__version__,
+        "torchaudio": torchaudio_version,
         "torch_cuda": torch.version.cuda,
         "cuda_available": cuda_available,
         "gpu": torch.cuda.get_device_name(0) if cuda_available else None,
