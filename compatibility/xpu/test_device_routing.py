@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from ComfyUI_JR_IndexTTS25.backend import indextts25_backend as backend
+
+
+def test_required_munch_dependency_is_declared():
+    plugin_root = Path(__file__).resolve().parents[2]
+    requirements = (plugin_root / "requirements.txt").read_text(encoding="utf-8")
+    assert "munch==4.0.0" in requirements.splitlines()
 
 
 def test_explicit_xpu_device_routes_to_xpu_without_hardware():

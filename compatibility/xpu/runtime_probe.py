@@ -93,6 +93,7 @@ def main() -> int:
                 "numba",
                 "llvmlite",
                 "librosa",
+                "munch",
                 "soundfile",
                 "WeTextProcessing",
                 "wetext",

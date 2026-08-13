@@ -11,6 +11,7 @@ jieba>=0.42.1
 json5>=0.12.1
 librosa>=0.11.0
 llvmlite>=0.46,<0.47
+munch==4.0.0
 numba>=0.63.1,<0.64
 omegaconf>=2.3.0
 openai-whisper>=20250625
