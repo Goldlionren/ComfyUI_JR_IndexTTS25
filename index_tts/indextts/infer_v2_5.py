@@ -47,6 +47,31 @@ def _write_pcm16_wav(output_path, wav, sampling_rate):
     sf.write(output_path, wav_data, sampling_rate, subtype="PCM_16", format="WAV")
 
 
+def _device_type(device):
+    return str(device).split(":", 1)[0].casefold()
+
+
+def _empty_device_cache(device):
+    backend = _device_type(device)
+    if backend == "cuda" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif backend == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+        torch.xpu.empty_cache()
+
+
+def _device_total_memory(device):
+    backend = _device_type(device)
+    index = int(str(device).split(":")[-1]) if ":" in str(device) else 0
+    try:
+        if backend == "cuda" and torch.cuda.is_available():
+            return int(torch.cuda.mem_get_info(index)[1])
+        if backend == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+            return int(torch.xpu.mem_get_info(index)[1])
+    except (AttributeError, RuntimeError):
+        return None
+    return None
+
+
 def is_kana(s: str) -> bool:
     hira = re.compile(r'^[\u3040-\u309F]+$')
     kata = re.compile(r'^[\u30A0-\u30FF]+$')
@@ -127,11 +152,11 @@ class IndexTTS2:
         self.use_accel = use_accel
         self.use_torch_compile = use_torch_compile
 
-        # Detect low-VRAM GPUs (< 10 GB) to enable automatic text chunking
+        # Detect low-VRAM CUDA/XPU GPUs (< 10 GB) to enable automatic text chunking.
         self.low_vram = False
-        if torch.cuda.is_available() and self.device.startswith("cuda"):
-            dev_idx = int(self.device.split(":")[-1]) if ":" in self.device else 0
-            total_vram_gb = torch.cuda.get_device_properties(dev_idx).total_memory / (1024 ** 3)
+        total_memory = _device_total_memory(self.device)
+        if total_memory is not None:
+            total_vram_gb = total_memory / (1024 ** 3)
             if total_vram_gb < 10.0:
                 self.low_vram = True
                 print(f">> Low-VRAM mode enabled ({total_vram_gb:.1f} GB < 10 GB), long text will be split into chunks")
@@ -633,7 +658,7 @@ class IndexTTS2:
                 self.cache_s2mel_style = None
                 self.cache_s2mel_prompt = None
                 self.cache_mel = None
-                torch.cuda.empty_cache()
+                _empty_device_cache(self.device)
             audio, sr = self._load_and_cut_audio(spk_audio_prompt, 15, verbose)
             audio_22k = torchaudio.transforms.Resample(sr, 22050)(audio)
             audio_16k = torchaudio.transforms.Resample(sr, 16000)(audio)
@@ -647,16 +672,16 @@ class IndexTTS2:
 
             # _, S_ref = self.semantic_codec.quantize(spk_cond_emb)
             S_ref = self.get_emb(input_features, attention_mask)
-            ref_mel = self.mel_fn(audio_22k.to(spk_cond_emb.device).float())
+            ref_mel = self.mel_fn(audio_22k.cpu().float()).to(self.device)
             ref_target_lengths = torch.LongTensor([ref_mel.size(2)]).to(ref_mel.device)
 
             audio_16k = torchaudio.transforms.Resample(sr, 16000)(self._load_and_cut_audio(spk_audio_prompt, 15, verbose)[0])
-            feat = torchaudio.compliance.kaldi.fbank(audio_16k.to(ref_mel.device),
+            feat = torchaudio.compliance.kaldi.fbank(audio_16k.cpu(),
                                                     num_mel_bins=80,
                                                     dither=0,
                                                     sample_frequency=16000)
             feat = feat - feat.mean(dim=0, keepdim=True)  # feat2另外一个滤波器能量组特征[922, 80]
-            style = self.campplus_model(feat.unsqueeze(0))  # 参考音频的全局style2[1,192]
+            style = self.campplus_model(feat.unsqueeze(0).to(self.device))  # 参考音频的全局style2[1,192]
 
             prompt_condition = self.s2mel.models['length_regulator'](
                 # S_ref,
@@ -692,7 +717,7 @@ class IndexTTS2:
         if self.cache_emo_cond is None or self.cache_emo_audio_prompt != emo_audio_prompt:
             if self.cache_emo_cond is not None:
                 self.cache_emo_cond = None
-                torch.cuda.empty_cache()
+                _empty_device_cache(self.device)
             emo_audio, _ = self._load_and_cut_audio(emo_audio_prompt,15,verbose,sr=16000)
             emo_inputs = self.extract_features(emo_audio, sampling_rate=16000, return_tensors="pt")
             emo_input_features = emo_inputs["input_features"]

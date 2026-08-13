@@ -1,5 +1,11 @@
 # ComfyUI_JR_IndexTTS25
 
+> **Intel XPU test branch:** Ubuntu 24.04 + Python 3.13 + PyTorch 2.11.0+xpu
+> on Arc A770 and Arc Pro B60 is currently a controlled candidate, not yet a
+> stable compatibility claim. Use `device=xpu:0`, start with FP32, and follow
+> [compatibility/xpu/README_zh.md](compatibility/xpu/README_zh.md). The stable
+> NVIDIA CUDA runtime and its exact package checks remain unchanged.
+
 IndexTTS-2.5 的 ComfyUI 原生节点。插件直接在 ComfyUI 进程内加载模型并输出标准 `AUDIO`，支持声音克隆、持久化声模、四种情绪控制、多人台词、小说转角色脚本、逐句情绪、LLM 发音标注、长文本和生成进度。
 
 当前版本：`v0.3.1`

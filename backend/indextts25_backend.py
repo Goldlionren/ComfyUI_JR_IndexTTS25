@@ -40,9 +40,12 @@ MODEL_DOWNLOAD_LOCK = threading.RLock()
 SUPPORTED_PYTHON_MINORS = ((3, 12), (3, 13))
 SUPPORTED_OPERATING_SYSTEMS = ("Windows", "Linux")
 SUPPORTED_MACHINE_TYPES = ("AMD64", "x86_64")
+SUPPORTED_XPU_OPERATING_SYSTEMS = ("Linux",)
 REQUIRED_TORCH_VERSION = "2.11.0+cu130"
 REQUIRED_TORCHAUDIO_VERSION = "2.11.0+cu130"
 REQUIRED_TORCH_CUDA = "13.0"
+REQUIRED_XPU_TORCH_VERSION = "2.11.0+xpu"
+REQUIRED_XPU_TORCHAUDIO_VERSION = "2.11.0+xpu"
 EMOTION_NAMES = (
     "happy",
     "angry",
@@ -289,6 +292,58 @@ def ensure_model_available(
         return target_dir
 
 
+def _xpu_available() -> bool:
+    return bool(hasattr(torch, "xpu") and torch.xpu.is_available())
+
+
+def _device_backend(device: str | torch.device | None = None) -> str:
+    requested = str(device or "").strip().casefold()
+    if requested and requested != "auto":
+        return requested.split(":", 1)[0]
+    if torch.cuda.is_available():
+        return "cuda"
+    if _xpu_available():
+        return "xpu"
+    return "cpu"
+
+
+def _accelerator_available(backend: str) -> bool:
+    if backend == "cuda":
+        return torch.cuda.is_available()
+    if backend == "xpu":
+        return _xpu_available()
+    return False
+
+
+def _empty_accelerator_cache(device: str | torch.device | None = None) -> None:
+    backend = _device_backend(device)
+    if backend == "cuda" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        try:
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
+    elif backend == "xpu" and _xpu_available():
+        torch.xpu.empty_cache()
+
+
+def _seed_accelerator(device: str | torch.device, seed: int) -> None:
+    backend = _device_backend(device)
+    if backend == "cuda" and torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    elif backend == "xpu" and _xpu_available():
+        torch.xpu.manual_seed_all(seed)
+
+
+def _bf16_supported(device: str | torch.device) -> bool:
+    backend = _device_backend(device)
+    if backend == "cuda":
+        return bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
+    if backend == "xpu":
+        return bool(_xpu_available() and torch.xpu.is_bf16_supported())
+    return False
+
+
 def runtime_compatibility_errors(
     *,
     python_version: tuple[int, int, int],
@@ -296,8 +351,9 @@ def runtime_compatibility_errors(
     machine: str,
     torch_version: str,
     torchaudio_version: str | None,
-    torch_cuda: str | None,
-    cuda_available: bool,
+    accelerator_backend: str,
+    accelerator_runtime: str | None,
+    accelerator_available: bool,
 ) -> list[str]:
     errors: list[str] = []
     if python_version[:2] not in SUPPORTED_PYTHON_MINORS:
@@ -311,30 +367,59 @@ def runtime_compatibility_errors(
         )
     if machine not in SUPPORTED_MACHINE_TYPES:
         errors.append(f"x86-64 required, found {machine or 'unknown architecture'}")
-    if torch_version != REQUIRED_TORCH_VERSION:
-        errors.append(f"torch {REQUIRED_TORCH_VERSION} required, found {torch_version}")
-    if torchaudio_version != REQUIRED_TORCHAUDIO_VERSION:
+    if accelerator_backend == "cuda":
+        if torch_version != REQUIRED_TORCH_VERSION:
+            errors.append(f"torch {REQUIRED_TORCH_VERSION} required, found {torch_version}")
+        if torchaudio_version != REQUIRED_TORCHAUDIO_VERSION:
+            errors.append(
+                f"torchaudio {REQUIRED_TORCHAUDIO_VERSION} required, "
+                f"found {torchaudio_version or 'not installed'}"
+            )
+        if accelerator_runtime != REQUIRED_TORCH_CUDA:
+            errors.append(
+                f"Torch CUDA {REQUIRED_TORCH_CUDA} required, found {accelerator_runtime}"
+            )
+        if not accelerator_available:
+            errors.append("CUDA is not available")
+    elif accelerator_backend == "xpu":
+        if operating_system not in SUPPORTED_XPU_OPERATING_SYSTEMS:
+            errors.append(
+                f"Intel XPU candidate requires Linux, found {operating_system}"
+            )
+        if torch_version != REQUIRED_XPU_TORCH_VERSION:
+            errors.append(
+                f"torch {REQUIRED_XPU_TORCH_VERSION} required, found {torch_version}"
+            )
+        if torchaudio_version != REQUIRED_XPU_TORCHAUDIO_VERSION:
+            errors.append(
+                f"torchaudio {REQUIRED_XPU_TORCHAUDIO_VERSION} required, "
+                f"found {torchaudio_version or 'not installed'}"
+            )
+        if not accelerator_available:
+            errors.append("Intel XPU is not available")
+    else:
         errors.append(
-            f"torchaudio {REQUIRED_TORCHAUDIO_VERSION} required, "
-            f"found {torchaudio_version or 'not installed'}"
+            f"NVIDIA CUDA or Intel XPU device required, found {accelerator_backend or 'unknown'}"
         )
-    if torch_cuda != REQUIRED_TORCH_CUDA:
-        errors.append(f"Torch CUDA {REQUIRED_TORCH_CUDA} required, found {torch_cuda}")
-    if not cuda_available:
-        errors.append("CUDA is not available")
     return errors
 
 
-def assert_runtime_compatible(strict: bool = True) -> dict[str, Any]:
-    info = runtime_diagnostics()
+def assert_runtime_compatible(
+    strict: bool = True,
+    requested_device: str | torch.device | None = None,
+) -> dict[str, Any]:
+    info = runtime_diagnostics(requested_device=requested_device)
+    backend = _device_backend(requested_device)
+    runtime = torch.version.cuda if backend == "cuda" else getattr(torch.version, "xpu", None)
     errors = runtime_compatibility_errors(
         python_version=sys.version_info[:3],
         operating_system=platform.system(),
         machine=platform.machine(),
-        torch_version=torch.__version__,
+        torch_version=str(torch.__version__),
         torchaudio_version=info["torchaudio"],
-        torch_cuda=torch.version.cuda,
-        cuda_available=torch.cuda.is_available(),
+        accelerator_backend=backend,
+        accelerator_runtime=runtime,
+        accelerator_available=_accelerator_available(backend),
     )
     if strict and errors:
         raise RuntimeError("Incompatible ComfyUI runtime:\n- " + "\n- ".join(errors))
@@ -361,7 +446,7 @@ def load_model(
     download_model: bool = False,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> IndexTTS25Handle:
-    assert_runtime_compatible(strict=strict_environment)
+    assert_runtime_compatible(strict=strict_environment, requested_device=device)
     source_dir = resolve_source_dir(source_path_override)
     model_dir = ensure_model_available(
         model_path_override,
@@ -374,8 +459,8 @@ def load_model(
     use_bf16 = precision.lower() == "bf16"
     if precision.lower() not in {"fp32", "bf16"}:
         raise ValueError(f"Unsupported precision: {precision}")
-    if use_bf16 and not torch.cuda.is_bf16_supported():
-        raise RuntimeError("BF16 was requested but the selected CUDA runtime does not support it")
+    if use_bf16 and not _bf16_supported(device):
+        raise RuntimeError(f"BF16 was requested but the selected {device} runtime does not support it")
     key = (str(model_dir), device, use_bf16, bool(enable_qwen_emotion), str(source_dir))
     with MODEL_CACHE_LOCK:
         cached = MODEL_CACHE.get(key)
@@ -423,12 +508,11 @@ def clear_model_cache(handle: IndexTTS25Handle | None = None) -> int:
         item.runtime = None
     removed.clear()
     gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        try:
-            torch.cuda.ipc_collect()
-        except Exception:
-            pass
+    if handle is not None:
+        _empty_accelerator_cache(handle.device)
+    else:
+        _empty_accelerator_cache("cuda")
+        _empty_accelerator_cache("xpu")
     return removed_count
 
 
@@ -568,9 +652,9 @@ def generate_audio(
             "Built-in text emotion requires Loader enable_qwen_emotion=True. "
             "Enable it or select llama.cpp_openai_api in Emotion Control."
         )
-    torch.manual_seed(int(seed) & 0x7FFFFFFF)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(int(seed) & 0x7FFFFFFF)
+    normalized_seed = int(seed) & 0x7FFFFFFF
+    torch.manual_seed(normalized_seed)
+    _seed_accelerator(handle.device, normalized_seed)
     with handle.lock, torch.inference_mode():
         previous_progress = getattr(handle.runtime, "gr_progress", None)
         if progress_callback is not None:
@@ -744,22 +828,51 @@ def cache_diagnostics() -> list[dict[str, Any]]:
         ]
 
 
-def runtime_diagnostics() -> dict[str, Any]:
+def runtime_diagnostics(
+    requested_device: str | torch.device | None = None,
+) -> dict[str, Any]:
     cuda_available = torch.cuda.is_available()
+    xpu_available = _xpu_available()
+    backend = _device_backend(requested_device)
     try:
         torchaudio_version = importlib.metadata.version("torchaudio")
     except importlib.metadata.PackageNotFoundError:
         torchaudio_version = None
+    gpu_name = None
+    gpu_capability: Any = None
+    accelerator_memory: dict[str, int] | None = None
+    accelerator_diagnostic_errors: list[str] = []
+    try:
+        if backend == "cuda" and cuda_available:
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_capability = list(torch.cuda.get_device_capability(0))
+            free_memory, total_memory = torch.cuda.mem_get_info(0)
+            accelerator_memory = {"free": int(free_memory), "total": int(total_memory)}
+        elif backend == "xpu" and xpu_available:
+            gpu_name = torch.xpu.get_device_name(0)
+            gpu_capability = str(torch.xpu.get_device_capability(0))
+            free_memory, total_memory = torch.xpu.mem_get_info(0)
+            accelerator_memory = {"free": int(free_memory), "total": int(total_memory)}
+    except (AttributeError, RuntimeError) as error:
+        accelerator_diagnostic_errors.append(f"{type(error).__name__}: {error}")
     return {
         "python": sys.version.split()[0],
         "operating_system": platform.system(),
         "machine": platform.machine(),
         "torch": torch.__version__,
         "torchaudio": torchaudio_version,
+        "accelerator_backend": backend,
+        "accelerator_available": _accelerator_available(backend),
+        "accelerator_runtime": (
+            torch.version.cuda if backend == "cuda" else getattr(torch.version, "xpu", None)
+        ),
+        "xpu_available": xpu_available,
         "torch_cuda": torch.version.cuda,
         "cuda_available": cuda_available,
-        "gpu": torch.cuda.get_device_name(0) if cuda_available else None,
-        "gpu_capability": list(torch.cuda.get_device_capability(0)) if cuda_available else None,
+        "gpu": gpu_name,
+        "gpu_capability": gpu_capability,
+        "accelerator_memory": accelerator_memory,
+        "accelerator_diagnostic_errors": accelerator_diagnostic_errors,
         "numba_cache_dir": os.environ.get("NUMBA_CACHE_DIR"),
         "models": cache_diagnostics(),
     }
