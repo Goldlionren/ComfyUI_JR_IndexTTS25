@@ -7,6 +7,8 @@ from ComfyUI_JR_IndexTTS25.backend import indextts25_backend as backend
 
 def test_explicit_xpu_device_routes_to_xpu_without_hardware():
     assert backend._device_backend("xpu:0") == "xpu"
+    assert backend._device_index("xpu:1") == 1
+    assert backend._device_index("xpu") == 0
 
 
 def test_xpu_cache_seed_and_bf16_use_xpu_api(monkeypatch):

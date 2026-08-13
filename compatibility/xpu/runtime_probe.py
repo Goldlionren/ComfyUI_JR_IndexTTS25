@@ -44,6 +44,13 @@ def xpu_operator_preflight(torch, device: str) -> dict[str, object]:
     return results
 
 
+def device_index(device: str) -> int:
+    try:
+        return max(0, int(device.rsplit(":", 1)[1])) if ":" in device else 0
+    except ValueError:
+        return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Intel XPU IndexTTS-2.5 evidence probe")
     parser.add_argument("--comfyui-root", type=Path, required=True)
@@ -113,13 +120,26 @@ def main() -> int:
         if not hasattr(torch, "xpu") or not torch.xpu.is_available():
             raise RuntimeError("torch.xpu is not available")
 
+        selected_device_index = device_index(args.device)
+        xpu_device_count = int(torch.xpu.device_count())
         report["torch_xpu_version"] = getattr(torch.version, "xpu", None)
         report["xpu_available"] = True
-        report["xpu_device_count"] = int(torch.xpu.device_count())
-        report["gpu"] = torch.xpu.get_device_name(0)
-        report["gpu_capability"] = str(torch.xpu.get_device_capability(0))
+        report["xpu_device_count"] = xpu_device_count
+        if selected_device_index >= xpu_device_count:
+            raise RuntimeError(
+                f"Requested {args.device}, but only {xpu_device_count} XPU device(s) exist"
+            )
+        report["xpu_devices"] = [
+            {"index": index, "name": torch.xpu.get_device_name(index)}
+            for index in range(xpu_device_count)
+        ]
+        report["selected_device_index"] = selected_device_index
+        report["gpu"] = torch.xpu.get_device_name(selected_device_index)
+        report["gpu_capability"] = str(
+            torch.xpu.get_device_capability(selected_device_index)
+        )
         try:
-            free_memory, total_memory = torch.xpu.mem_get_info(0)
+            free_memory, total_memory = torch.xpu.mem_get_info(selected_device_index)
             report["xpu_memory"] = {
                 "free": int(free_memory),
                 "total": int(total_memory),

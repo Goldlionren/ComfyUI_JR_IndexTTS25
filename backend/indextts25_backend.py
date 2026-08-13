@@ -307,6 +307,16 @@ def _device_backend(device: str | torch.device | None = None) -> str:
     return "cpu"
 
 
+def _device_index(device: str | torch.device | None = None) -> int:
+    requested = str(device or "").strip()
+    if ":" not in requested:
+        return 0
+    try:
+        return max(0, int(requested.rsplit(":", 1)[1]))
+    except ValueError:
+        return 0
+
+
 def _accelerator_available(backend: str) -> bool:
     if backend == "cuda":
         return torch.cuda.is_available()
@@ -834,6 +844,7 @@ def runtime_diagnostics(
     cuda_available = torch.cuda.is_available()
     xpu_available = _xpu_available()
     backend = _device_backend(requested_device)
+    device_index = _device_index(requested_device)
     try:
         torchaudio_version = importlib.metadata.version("torchaudio")
     except importlib.metadata.PackageNotFoundError:
@@ -844,14 +855,14 @@ def runtime_diagnostics(
     accelerator_diagnostic_errors: list[str] = []
     try:
         if backend == "cuda" and cuda_available:
-            gpu_name = torch.cuda.get_device_name(0)
-            gpu_capability = list(torch.cuda.get_device_capability(0))
-            free_memory, total_memory = torch.cuda.mem_get_info(0)
+            gpu_name = torch.cuda.get_device_name(device_index)
+            gpu_capability = list(torch.cuda.get_device_capability(device_index))
+            free_memory, total_memory = torch.cuda.mem_get_info(device_index)
             accelerator_memory = {"free": int(free_memory), "total": int(total_memory)}
         elif backend == "xpu" and xpu_available:
-            gpu_name = torch.xpu.get_device_name(0)
-            gpu_capability = str(torch.xpu.get_device_capability(0))
-            free_memory, total_memory = torch.xpu.mem_get_info(0)
+            gpu_name = torch.xpu.get_device_name(device_index)
+            gpu_capability = str(torch.xpu.get_device_capability(device_index))
+            free_memory, total_memory = torch.xpu.mem_get_info(device_index)
             accelerator_memory = {"free": int(free_memory), "total": int(total_memory)}
     except (AttributeError, RuntimeError) as error:
         accelerator_diagnostic_errors.append(f"{type(error).__name__}: {error}")
@@ -862,6 +873,7 @@ def runtime_diagnostics(
         "torch": torch.__version__,
         "torchaudio": torchaudio_version,
         "accelerator_backend": backend,
+        "accelerator_device_index": device_index,
         "accelerator_available": _accelerator_available(backend),
         "accelerator_runtime": (
             torch.version.cuda if backend == "cuda" else getattr(torch.version, "xpu", None)
