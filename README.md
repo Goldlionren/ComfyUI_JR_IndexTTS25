@@ -1,8 +1,8 @@
 # ComfyUI_JR_IndexTTS25
 
-IndexTTS-2.5 的 ComfyUI 原生节点。插件直接在 ComfyUI 进程内加载模型并输出标准 `AUDIO`，支持声音克隆、持久化声模、四种情绪控制、多人台词、逐句情绪、LLM 发音标注、长文本和生成进度。
+IndexTTS-2.5 的 ComfyUI 原生节点。插件直接在 ComfyUI 进程内加载模型并输出标准 `AUDIO`，支持声音克隆、持久化声模、四种情绪控制、多人台词、小说转角色脚本、逐句情绪、LLM 发音标注、长文本和生成进度。
 
-当前版本：`v0.2.0`
+当前版本：`v0.3.0`
 
 > 已验证目标环境：Windows、NVIDIA CUDA、Python 3.13.11、PyTorch 2.11.0+cu130、Torch CUDA 13.0。兼容后的 IndexTTS 运行源码已经内置，普通用户不需要再次下载源码或应用补丁。
 
@@ -14,7 +14,8 @@ IndexTTS-2.5 的 ComfyUI 原生节点。插件直接在 ComfyUI 进程内加载�
 - [第一次运行：自动下载模型](#第一次运行自动下载模型)
 - [第一个声音克隆工作流](#第一个声音克隆工作流)
 - [以后直接加载声模](#以后直接加载声模)
-- [九个节点完整说明](#九个节点完整说明)
+- [十个节点完整说明](#十个节点完整说明)
+- [小说转多人语音工作流](#小说转多人语音工作流)
 - [多人台词语法](#多人台词语法)
 - [采样与长文本参数](#采样与长文本参数)
 - [路径与文件位置](#路径与文件位置)
@@ -24,7 +25,7 @@ IndexTTS-2.5 的 ComfyUI 原生节点。插件直接在 ComfyUI 进程内加载�
 
 ## 功能与节点
 
-全部节点位于 `JR/Audio/IndexTTS 2.5`，共 9 个：
+全部节点位于 `JR/Audio/IndexTTS 2.5`，共 10 个：
 
 | 节点 | 用途 | 输出 |
 |---|---|---|
@@ -34,6 +35,7 @@ IndexTTS-2.5 的 ComfyUI 原生节点。插件直接在 ComfyUI 进程内加载�
 | JR IndexTTS 2.5 Voice Preset Manager | 列出、查看、改名或删除声模 | `STRING` JSON |
 | JR IndexTTS 2.5 Emotion Control | 手动、参考音频或文本情绪 | `JR_INDEXTTS25_EMOTION` |
 | JR IndexTTS 2.5 Pronunciation Enhance (LLM) | 用 LLM 添加官方发音标注 | `STRING` |
+| JR IndexTTS 2.5 Novel to Dialogue (LLM) | 把小说转换为 Multi-Talk 角色脚本 | `STRING` × 3 |
 | JR IndexTTS 2.5 Generate | 单声音合成 | `AUDIO` |
 | JR IndexTTS 2.5 Multi-Talk Generate | 最多 10 个声音的多人合成 | `AUDIO` |
 | JR IndexTTS 2.5 Runtime Diagnostics | 查看环境、缓存或卸载模型 | `STRING` JSON |
@@ -46,6 +48,7 @@ IndexTTS-2.5 的 ComfyUI 原生节点。插件直接在 ComfyUI 进程内加载�
 - llama.cpp / OpenAI-compatible API 情绪分析
 - 可选的官方内置 QwenEmotion
 - 中文、英文、日文 LLM 发音增强
+- 小说旁白/引语/说话人识别与原文保护
 - 多人台词与逐句情绪标签
 - `do_sample`、temperature、top-p、top-k、beam 等官方生成参数
 - 长文本切段、段间静音和 ComfyUI ProgressBar
@@ -239,7 +242,41 @@ ComfyUI/models/indextts/voice_presets/
 
 每个声模保存稳定 ID、显示名称、`prompt.wav`、采样率、时长和 SHA-256。移动或备份声模库时，应完整复制整个声模目录。
 
-## 九个节点完整说明
+## 小说转多人语音工作流
+
+先启动 llama.cpp 的 OpenAI-compatible API。默认地址是 `http://127.0.0.1:10000`，API key 和 model 通常都可以留空。model 留空时插件会自动读取 llama.cpp 当前加载的模型。
+
+连接方式：
+
+```text
+小说原文 → Novel to Dialogue.dialogue ───────────────┐
+                                                      ├→ Multi-Talk Generate → AUDIO
+Loader.model ─────────────────────────────────────────┤
+Load Voice Preset（旁白、紫灵等）────────────────────┘
+```
+
+示例原文：
+
+```text
+天色渐渐变暗了，紫灵走在山谷中略显凄凉。她仰头看天，自言自语道“时间差不多了，我要赶紧加快速度赶过去了。”
+```
+
+`speaker_only` 输出：
+
+```text
+[旁白]: 天色渐渐变暗了，紫灵走在山谷中略显凄凉。她仰头看天，自言自语道
+[紫灵]: 时间差不多了，我要赶紧加快速度赶过去了。
+```
+
+`llm_emotion_tags` 输出还会带现有 Multi-Talk 能直接解析的八维情绪标签。`strict_text_preservation=true` 时，LLM 只要删字、加字、改写、重复或打乱正文，节点就会拒绝结果并报错。
+
+识别出的角色名必须与连接到 Multi-Talk 的 Voice Preset 名称一致。建议在 `known_speakers` 预先填写重要角色，例如：
+
+```text
+旁白, 紫灵, 林志远
+```
+
+## 十个节点完整说明
 
 ### 1. JR IndexTTS 2.5 Loader
 
@@ -381,7 +418,46 @@ Emotion Control.text_emotion_backend: builtin_qwen
 
 节点会校验：去掉标注后的正文必须与原文完全一致。LLM 如果改写、删字或加字，节点会报错，不会静默使用错误结果。也可以不使用该节点，直接在 Generate 正文中手写官方标注。
 
-### 7. JR IndexTTS 2.5 Generate
+### 7. JR IndexTTS 2.5 Novel to Dialogue (LLM)
+
+调用 llama.cpp/OpenAI-compatible LLM，把小说中的旁白、引语和说话人转换为 Multi-Talk 标签。主输出 `dialogue` 可以直接连接 Multi-Talk Generate 的 `dialogue`。
+
+| 参数 | 初学者设置 | 说明 |
+|---|---|---|
+| `novel_text` | 粘贴小说原文 | 支持连接其他 `STRING` 节点。不能为空。 |
+| `narrator_name` | `旁白` | 所有叙述内容使用的角色名；需要准备同名 Voice。 |
+| `known_speakers` | 填主要角色 | 用逗号、分号或换行分隔；名称应与 Voice Preset 一致。允许 LLM 发现新角色。 |
+| `emotion_mode` | `llm_emotion_tags` | 见下面三种模式。 |
+| `emotion_strength` | `0.7` | 只缩放 LLM 生成的情绪向量，0 为关闭，1 为原值。最终总量仍限制在 0.8。 |
+| `chunk_size_chars` | `2000` | 长篇小说分块大小。优先在引号外的句末切分，并向下一块传递最近角色上下文。 |
+| `strict_text_preservation` | `true` | 检查正文没有被删改、重复或乱序。正式生成必须保持开启。 |
+| `openai_api_url` | `http://127.0.0.1:10000` | llama.cpp/OpenAI-compatible 服务地址。 |
+| `openai_api_key` | 留空 | 本地 llama.cpp 通常不需要。 |
+| `openai_model` | 留空 | 自动读取 `/v1/models` 返回的第一个模型。 |
+| `llm_temperature` | `0.1` | 保持低值，减少改写和不稳定分段。 |
+| `llm_max_tokens` | `4096` | 单个分块允许的最大输出 token。响应截断时增大或降低分块大小。 |
+| `llm_timeout_seconds` | `300` | 每个分块的请求超时。 |
+| `instruction` | 通常留空 | 可写角色别名或特殊引号规则，不要要求润色、翻译或改写正文。 |
+
+三种情绪模式：
+
+| mode | 输出形式 | 特点 |
+|---|---|---|
+| `llm_emotion_tags` | `[紫灵|calm=0.35]: ...` | 推荐。同一次小说分析直接生成官方八维情绪标签，不需要逐句再请求 LLM。 |
+| `speaker_only` | `[紫灵]: ...` | 只区分旁白和角色，不添加逐句情绪。 |
+| `auto_emotion` | `[紫灵|auto]: ...` | Multi-Talk 生成每一段时再调用情绪分析，调用次数更多。 |
+
+三个输出：
+
+| 输出 | 用途 |
+|---|---|
+| `dialogue` | 直接连接 Multi-Talk Generate。 |
+| `speaker_list` | 每行一个识别出的角色，用来检查是否准备了对应声模。 |
+| `conversion_report` | JSON 报告，包含分块数、角色、模式、严格校验状态和警告。 |
+
+节点只删除成对引号的分隔符，不应改写引号内外的正文。特别长、角色关系复杂或代词很多的章节，建议按章节运行并检查 `speaker_list` 和转换结果后再生成音频。
+
+### 8. JR IndexTTS 2.5 Generate
 
 单声音生成。必须连接 Loader 的 `model` 和任一 Voice 节点的 `voice`，输出标准 ComfyUI `AUDIO`（22,050 Hz 单声道）。
 
@@ -398,7 +474,7 @@ Emotion Control.text_emotion_backend: builtin_qwen
 
 高级生成参数见“采样与长文本参数”。
 
-### 8. JR IndexTTS 2.5 Multi-Talk Generate
+### 9. JR IndexTTS 2.5 Multi-Talk Generate
 
 按角色标签选择多个声音，逐段生成并拼成一个 `AUDIO`。
 
@@ -416,7 +492,7 @@ Emotion Control.text_emotion_backend: builtin_qwen
 
 角色名按 Voice 的声模名称进行不区分大小写匹配。未知角色会回退到第一个已连接 Voice，因此正式生成前应检查角色拼写。
 
-### 9. JR IndexTTS 2.5 Runtime Diagnostics
+### 10. JR IndexTTS 2.5 Runtime Diagnostics
 
 输出 JSON。建议连接 Show/Preview Text 节点查看。
 
@@ -694,6 +770,14 @@ Any modifications made to the original model in this Derivative Work are not end
 - 最终兼容 revision：`30fecfa188455a560aeea6f6dc60bc2f7c19bb14`
 
 ## 更新记录
+
+### v0.3.0
+
+- 新增 Novel to Dialogue (LLM)，把小说旁白和角色引语转换为 Multi-Talk 可直接使用的标签脚本。
+- 支持 `speaker_only`、`auto_emotion` 和一次性 `llm_emotion_tags` 三种转换模式。
+- 新增长文本分块、已知角色与上下文传递、角色列表和 JSON 转换报告。
+- 严格原文保护会拒绝 LLM 的删字、加字、改写、重复或乱序结果。
+- 节点总数增加到 10 个；现有 Loader、Voice、Emotion、Generate 和 Multi-Talk 接口保持不变。
 
 ### v0.2.0
 

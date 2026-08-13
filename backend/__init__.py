@@ -26,11 +26,17 @@ from .voice_presets import (
 from .openai_compatible import (
     DEFAULT_OPENAI_API_URL,
     DEFAULT_OPENAI_MODEL,
+    NOVEL_EMOTION_MODES,
+    NovelDialogueConversion,
+    NovelDialogueSegment,
     analyze_emotion_text,
+    convert_novel_to_dialogue,
     enhance_pronunciation_text,
     normalize_pronunciation_response,
     openai_chat_completion,
     parse_emotion_response,
+    parse_novel_dialogue_response,
+    split_novel_text,
 )
 
 __all__ = [
@@ -57,9 +63,15 @@ __all__ = [
     "save_voice_preset",
     "DEFAULT_OPENAI_API_URL",
     "DEFAULT_OPENAI_MODEL",
+    "NOVEL_EMOTION_MODES",
+    "NovelDialogueConversion",
+    "NovelDialogueSegment",
     "analyze_emotion_text",
+    "convert_novel_to_dialogue",
     "enhance_pronunciation_text",
     "normalize_pronunciation_response",
     "openai_chat_completion",
     "parse_emotion_response",
+    "parse_novel_dialogue_response",
+    "split_novel_text",
 ]

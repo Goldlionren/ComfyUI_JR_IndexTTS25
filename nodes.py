@@ -20,6 +20,8 @@ from .backend.indextts25_backend import (
 from .backend.openai_compatible import (
     DEFAULT_OPENAI_API_URL,
     DEFAULT_OPENAI_MODEL,
+    NOVEL_EMOTION_MODES,
+    convert_novel_to_dialogue,
     enhance_pronunciation_text,
 )
 from .backend.voice_presets import (
@@ -424,6 +426,117 @@ class JR_IndexTTS25_PronunciationEnhance:
         return (result,)
 
 
+class JR_IndexTTS25_NovelToDialogue:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "novel_text": ("STRING", {"multiline": True, "default": ""}),
+                "narrator_name": ("STRING", {"default": "旁白"}),
+                "known_speakers": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "default": "",
+                        "placeholder": "可选：紫灵, 林志远（名称应与 Voice Preset 一致）",
+                    },
+                ),
+                "emotion_mode": (list(NOVEL_EMOTION_MODES), {"default": "llm_emotion_tags"}),
+                "emotion_strength": (
+                    "FLOAT",
+                    {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+                "chunk_size_chars": (
+                    "INT",
+                    {"default": 2000, "min": 200, "max": 10000, "step": 100},
+                ),
+                "strict_text_preservation": ("BOOLEAN", {"default": True}),
+                "openai_api_url": ("STRING", {"default": DEFAULT_OPENAI_API_URL}),
+                "openai_api_key": ("STRING", {"default": ""}),
+                "openai_model": ("STRING", {"default": DEFAULT_OPENAI_MODEL}),
+                "llm_temperature": (
+                    "FLOAT",
+                    {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+                "llm_max_tokens": (
+                    "INT",
+                    {"default": 4096, "min": 256, "max": 32768, "step": 256},
+                ),
+                "llm_timeout_seconds": (
+                    "INT",
+                    {"default": 300, "min": 1, "max": 1800, "step": 1},
+                ),
+                "instruction": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "default": "",
+                        "placeholder": "可选：补充角色别名或小说特殊写法，不要要求改写正文。",
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("dialogue", "speaker_list", "conversion_report")
+    FUNCTION = "convert"
+    CATEGORY = CATEGORY
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def convert(
+        self,
+        novel_text,
+        narrator_name,
+        known_speakers,
+        emotion_mode,
+        emotion_strength,
+        chunk_size_chars,
+        strict_text_preservation,
+        openai_api_url,
+        openai_api_key,
+        openai_model,
+        llm_temperature,
+        llm_max_tokens,
+        llm_timeout_seconds,
+        instruction,
+    ):
+        progress_bar = _new_progress_bar()
+        result = convert_novel_to_dialogue(
+            novel_text,
+            narrator_name=narrator_name,
+            known_speakers=known_speakers,
+            emotion_mode=emotion_mode,
+            emotion_strength=float(emotion_strength),
+            api_url=openai_api_url,
+            api_key=openai_api_key,
+            model=openai_model,
+            temperature=float(llm_temperature),
+            max_tokens=int(llm_max_tokens),
+            timeout_seconds=int(llm_timeout_seconds),
+            chunk_size_chars=int(chunk_size_chars),
+            strict_text_preservation=bool(strict_text_preservation),
+            instruction=instruction,
+            progress_callback=_progress_callback(progress_bar),
+        )
+        report = {
+            "status": "PASS" if not result.warnings else "PASS_WITH_WARNINGS",
+            "chunk_count": result.chunk_count,
+            "speaker_count": len(result.speakers),
+            "speakers": list(result.speakers),
+            "emotion_mode": emotion_mode,
+            "strict_text_preservation": bool(strict_text_preservation),
+            "warnings": list(result.warnings),
+        }
+        return (
+            result.dialogue,
+            "\n".join(result.speakers),
+            json.dumps(report, ensure_ascii=False, indent=2),
+        )
+
+
 class JR_IndexTTS25_Generate:
     @classmethod
     def INPUT_TYPES(cls):
@@ -646,6 +759,7 @@ NODE_CLASS_MAPPINGS = {
     "JR_IndexTTS25_VoicePresetManager": JR_IndexTTS25_VoicePresetManager,
     "JR_IndexTTS25_EmotionControl": JR_IndexTTS25_EmotionControl,
     "JR_IndexTTS25_PronunciationEnhance": JR_IndexTTS25_PronunciationEnhance,
+    "JR_IndexTTS25_NovelToDialogue": JR_IndexTTS25_NovelToDialogue,
     "JR_IndexTTS25_Generate": JR_IndexTTS25_Generate,
     "JR_IndexTTS25_MultiTalkGenerate": JR_IndexTTS25_MultiTalkGenerate,
     "JR_IndexTTS25_RuntimeDiagnostics": JR_IndexTTS25_RuntimeDiagnostics,
@@ -658,6 +772,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "JR_IndexTTS25_VoicePresetManager": "JR IndexTTS 2.5 Voice Preset Manager",
     "JR_IndexTTS25_EmotionControl": "JR IndexTTS 2.5 Emotion Control",
     "JR_IndexTTS25_PronunciationEnhance": "JR IndexTTS 2.5 Pronunciation Enhance (LLM)",
+    "JR_IndexTTS25_NovelToDialogue": "JR IndexTTS 2.5 Novel to Dialogue (LLM)",
     "JR_IndexTTS25_Generate": "JR IndexTTS 2.5 Generate",
     "JR_IndexTTS25_MultiTalkGenerate": "JR IndexTTS 2.5 Multi-Talk Generate",
     "JR_IndexTTS25_RuntimeDiagnostics": "JR IndexTTS 2.5 Runtime Diagnostics",
