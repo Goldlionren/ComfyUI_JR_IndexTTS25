@@ -29,6 +29,7 @@ from .openai_compatible import (
     NOVEL_EMOTION_MODES,
     NovelDialogueConversion,
     NovelDialogueSegment,
+    NovelSourceSpan,
     analyze_emotion_text,
     convert_novel_to_dialogue,
     enhance_pronunciation_text,
@@ -36,7 +37,9 @@ from .openai_compatible import (
     openai_chat_completion,
     parse_emotion_response,
     parse_novel_dialogue_response,
+    parse_novel_span_assignments,
     split_novel_text,
+    split_novel_source_spans,
 )
 
 __all__ = [
@@ -66,6 +69,7 @@ __all__ = [
     "NOVEL_EMOTION_MODES",
     "NovelDialogueConversion",
     "NovelDialogueSegment",
+    "NovelSourceSpan",
     "analyze_emotion_text",
     "convert_novel_to_dialogue",
     "enhance_pronunciation_text",
@@ -73,5 +77,7 @@ __all__ = [
     "openai_chat_completion",
     "parse_emotion_response",
     "parse_novel_dialogue_response",
+    "parse_novel_span_assignments",
     "split_novel_text",
+    "split_novel_source_spans",
 ]

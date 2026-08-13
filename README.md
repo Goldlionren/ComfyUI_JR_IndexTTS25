@@ -2,7 +2,7 @@
 
 IndexTTS-2.5 的 ComfyUI 原生节点。插件直接在 ComfyUI 进程内加载模型并输出标准 `AUDIO`，支持声音克隆、持久化声模、四种情绪控制、多人台词、小说转角色脚本、逐句情绪、LLM 发音标注、长文本和生成进度。
 
-当前版本：`v0.3.0`
+当前版本：`v0.3.1`
 
 > 已验证目标环境：Windows、NVIDIA CUDA、Python 3.13.11、PyTorch 2.11.0+cu130、Torch CUDA 13.0。兼容后的 IndexTTS 运行源码已经内置，普通用户不需要再次下载源码或应用补丁。
 
@@ -268,7 +268,9 @@ Load Voice Preset（旁白、紫灵等）─────────────
 [紫灵]: 时间差不多了，我要赶紧加快速度赶过去了。
 ```
 
-`llm_emotion_tags` 输出还会带现有 Multi-Talk 能直接解析的八维情绪标签。`strict_text_preservation=true` 时，LLM 只要删字、加字、改写、重复或打乱正文，节点就会拒绝结果并报错。
+`llm_emotion_tags` 输出还会带现有 Multi-Talk 能直接解析的八维情绪标签。对于使用 `“…”`、`「…」`、`『…』` 或英文双引号的小说，插件先把原文拆成不可修改的编号片段，LLM 只返回段号、角色和情绪，正文不会交给 LLM 重写。格式不合格时会自动重试一次。
+
+`strict_text_preservation=true` 时，无引号或引号不成对、需要兼容旧转换路径的文本，只要 LLM 删字、加字、改写、重复或打乱正文，节点仍会拒绝结果并显示首个差异位置。正式使用不要关闭该选项。
 
 识别出的角色名必须与连接到 Multi-Talk 的 Voice Preset 名称一致。建议在 `known_speakers` 预先填写重要角色，例如：
 
@@ -455,7 +457,7 @@ Emotion Control.text_emotion_backend: builtin_qwen
 | `speaker_list` | 每行一个识别出的角色，用来检查是否准备了对应声模。 |
 | `conversion_report` | JSON 报告，包含分块数、角色、模式、严格校验状态和警告。 |
 
-节点只删除成对引号的分隔符，不应改写引号内外的正文。特别长、角色关系复杂或代词很多的章节，建议按章节运行并检查 `speaker_list` 和转换结果后再生成音频。
+节点只删除成对引号的分隔符，不改写引号内外的正文。标准引号文本使用“不可变原文片段 → LLM 只分配角色/情绪”的安全流程；无引号文本使用兼容流程并严格校验。特别长、角色关系复杂或代词很多的章节，建议按章节运行并检查 `speaker_list` 和转换结果后再生成音频。
 
 ### 8. JR IndexTTS 2.5 Generate
 
@@ -770,6 +772,13 @@ Any modifications made to the original model in this Derivative Work are not end
 - 最终兼容 revision：`30fecfa188455a560aeea6f6dc60bc2f7c19bb14`
 
 ## 更新记录
+
+### v0.3.1
+
+- 标准引号小说改为不可变编号片段，LLM 只返回说话人和情绪，不再重新抄写正文。
+- LLM 元数据格式错误或遗漏段号时自动以零温度重试一次。
+- 无引号兼容路径也增加一次严格重试，并在失败时显示首个文本差异位置。
+- 保持 Novel to Dialogue 的输入、输出和工作流连接不变。
 
 ### v0.3.0
 
