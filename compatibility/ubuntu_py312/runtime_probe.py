@@ -56,6 +56,7 @@ def main() -> int:
                 "numba",
                 "llvmlite",
                 "librosa",
+                "matplotlib",
                 "munch",
                 "soundfile",
                 "WeTextProcessing",
