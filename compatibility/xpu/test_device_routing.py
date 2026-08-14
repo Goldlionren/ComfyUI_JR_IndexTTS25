@@ -3,14 +3,37 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from packaging.requirements import Requirement
+
 from ComfyUI_JR_IndexTTS25.backend import indextts25_backend as backend
 
 
 def test_required_runtime_dependencies_are_declared():
     plugin_root = Path(__file__).resolve().parents[2]
-    requirements = (plugin_root / "requirements.txt").read_text(encoding="utf-8")
-    assert "munch==4.0.0" in requirements.splitlines()
-    assert "matplotlib==3.10.8" in requirements.splitlines()
+    requirement_lines = (plugin_root / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    assert "munch>=4.0.0,<5" in requirement_lines
+    assert "matplotlib>=3.10.8,<4" in requirement_lines
+    requirements = [
+        Requirement(line)
+        for line in requirement_lines
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert not any(
+        specifier.operator == "=="
+        for requirement in requirements
+        for specifier in requirement.specifier
+    )
+
+
+def test_audioop_lts_is_only_selected_when_stdlib_audioop_is_removed():
+    plugin_root = Path(__file__).resolve().parents[2]
+    requirement_lines = (plugin_root / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    audioop_requirement = Requirement(
+        next(line for line in requirement_lines if line.startswith("audioop-lts"))
+    )
+    assert audioop_requirement.marker is not None
+    assert audioop_requirement.marker.evaluate({"python_version": "3.12"}) is False
+    assert audioop_requirement.marker.evaluate({"python_version": "3.13"}) is True
 
 
 def test_explicit_xpu_device_routes_to_xpu_without_hardware():

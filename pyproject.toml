@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-jr-indextts25"
-version = "0.5.0"
+version = "0.5.1"
 description = "Native IndexTTS-2.5 nodes for ComfyUI on Python 3.12/3.13 with NVIDIA CUDA or Intel XPU"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"

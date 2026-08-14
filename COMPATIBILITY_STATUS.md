@@ -1,10 +1,10 @@
 # Compatibility release status
 
-Release: `0.5.0`
+Release: `0.5.1`
 
 Stable base commit: `f99efba23d50cf40e0d1c74c1145d62df43f1646`
 
-Development branch: `codex/xpu-compat`; release target: GitHub `main`
+Development branch: `codex/python312-dependency-ranges`; release target: GitHub `main`
 
 The dual-backend release completed user acceptance and is approved for the
 main plugin branch.

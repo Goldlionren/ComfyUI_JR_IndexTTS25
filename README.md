@@ -5,7 +5,7 @@
 
 IndexTTS-2.5 的 ComfyUI 原生节点。插件直接在 ComfyUI 进程内加载模型并输出标准 `AUDIO`，支持声音克隆、持久化声模、四种情绪控制、多人台词、小说转角色脚本、逐句情绪、LLM 发音标注、长文本和生成进度。
 
-当前版本：`v0.5.0`
+当前版本：`v0.5.1`
 
 > 已验证基线包括 Windows + NVIDIA CUDA，以及 Ubuntu 24.04 + Intel Arc XPU。
 > 兼容后的 IndexTTS 运行源码已经内置，普通用户不需要再次下载源码或应用补丁。
@@ -146,6 +146,11 @@ Ubuntu 虚拟环境通常类似：
 ```
 
 上面三条命令只选择与你的目录结构匹配的一条。根 `requirements.txt` 不声明 Torch、TorchAudio、TorchVision、Transformers、Tokenizers、NumPy 或 Safetensors，避免主动替换 ComfyUI 核心栈。
+
+插件元数据支持 Python `>=3.12,<3.14`。Python 3.12 自带标准库 `audioop`；
+`audioop-lts` 的 `python_version >= "3.13"` 条件只是在 Python 3.13 移除该标准库后
+补装兼容实现，不表示插件最低版本是 Python 3.13。普通运行依赖使用带主版本上限的
+兼容范围，避免无上限升级到尚未验证的破坏性主版本。
 
 可选依赖（下面以 ComfyUI-aki-v3 为例；其他安装只替换 Python 路径）：
 
@@ -799,6 +804,12 @@ Any modifications made to the original model in this Derivative Work are not end
 - 最终兼容 revision：`30fecfa188455a560aeea6f6dc60bc2f7c19bb14`
 
 ## 更新记录
+
+### v0.5.1
+
+- 明确插件支持 Python `>=3.12,<3.14`；Python 3.12 使用内置 `audioop`，3.13 才安装 `audioop-lts`。
+- `matplotlib` 改为 `>=3.10.8,<4`，`munch` 改为 `>=4.0.0,<5`，不再精确锁死补丁版本。
+- 新增 requirements 标记与无 `==` 回归测试，保留主版本上限以防未来破坏性升级。
 
 ### v0.5.0
 
